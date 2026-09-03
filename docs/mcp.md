@@ -28,7 +28,7 @@ The remote endpoint is stateless: each request builds a fresh server, no session
 ### Claude Code
 
 ```bash
-claude mcp add --transport http firetrace https://fire-trace.vercel.app/api/mcp --header "Authorization: Bearer ft_live_..."
+claude mcp add --transport http firetrace https://tracing.art3m1s.me/api/mcp --header "Authorization: Bearer ft_live_..."
 ```
 
 ### Claude Desktop, Cursor, and other JSON-configured clients
@@ -38,7 +38,7 @@ claude mcp add --transport http firetrace https://fire-trace.vercel.app/api/mcp 
   "mcpServers": {
     "firetrace": {
       "type": "http",
-      "url": "https://fire-trace.vercel.app/api/mcp",
+      "url": "https://tracing.art3m1s.me/api/mcp",
       "headers": { "Authorization": "Bearer ft_live_..." }
     }
   }
@@ -54,7 +54,7 @@ For clients that only support stdio servers:
       "command": "npx",
       "args": ["-y", "@firetrace/mcp"],
       "env": {
-        "FIRETRACE_ENDPOINT": "https://fire-trace.vercel.app",
+        "FIRETRACE_ENDPOINT": "https://tracing.art3m1s.me",
         "FIRETRACE_API_KEY": "ft_live_..."
       }
     }
@@ -70,12 +70,9 @@ From a checkout of this repository the same bridge runs with `pnpm mcp:stdio` (a
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const transport = new StreamableHTTPClientTransport(
-  new URL("https://fire-trace.vercel.app/api/mcp"),
-  {
-    requestInit: { headers: { Authorization: `Bearer ${process.env.FIRETRACE_API_KEY}` } },
-  },
-);
+const transport = new StreamableHTTPClientTransport(new URL("https://tracing.art3m1s.me/api/mcp"), {
+  requestInit: { headers: { Authorization: `Bearer ${process.env.FIRETRACE_API_KEY}` } },
+});
 const client = new Client({ name: "my-agent", version: "1.0.0" });
 await client.connect(transport);
 const failures = await client.callTool({

@@ -4,6 +4,7 @@ import { toApiKeySummary, toProject } from "./convert";
 import { ApiError } from "./errors";
 import { newProjectId } from "./ids";
 import { DEFAULT_KEY_SCOPES, scopesFromDocument, type KeyScope } from "./scopes";
+import { TRIAL_MAX_PROJECTS, type Plan } from "./trial";
 import type { ApiKeySummary, Project } from "./types";
 
 const DELETE_BATCH = 400;
@@ -39,6 +40,17 @@ export async function listProjects(db: Firestore): Promise<Project[]> {
   return snap.docs.map((d) => toProject(d.id, d.data()));
 }
 
+/** Projects created under one verified email (trial users). Sorted in memory; no composite index needed. */
+export async function listProjectsForEmail(db: Firestore, email: string): Promise<Project[]> {
+  const snap = await db
+    .collection("projects")
+    .where("ownerEmail", "==", email.trim().toLowerCase())
+    .get();
+  return snap.docs
+    .map((d) => toProject(d.id, d.data()))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 export async function getProject(db: Firestore, projectId: string): Promise<Project | null> {
   const snap = await db.collection("projects").doc(projectId).get();
   return snap.exists ? toProject(snap.id, snap.data() ?? {}) : null;
@@ -53,18 +65,51 @@ export async function requireProject(db: Firestore, projectId: string): Promise<
 /** Create a project; name and slug are unique within the deployment. */
 export async function createProject(
   db: Firestore,
-  input: { name: string; description?: string; ownerUid: string },
+  input: {
+    name: string;
+    description?: string;
+    ownerUid: string;
+    ownerEmail?: string | null;
+    /** Trial projects are capped by FIRETRACE_TRIAL_TRACE_LIMIT and limited to one per account. */
+    plan?: "owner" | "trial";
+  },
 ): Promise<Project> {
   const name = validateProjectName(input.name);
   const description = validateDescription(input.description);
   const slug = slugify(name);
+  const plan = input.plan ?? "owner";
+  const ownerEmail = input.ownerEmail?.trim().toLowerCase() || null;
+  if (plan === "trial" && !ownerEmail) {
+    throw new ApiError(400, "invalid_request", "Trial projects need the creator's email.");
+  }
   const id = newProjectId();
   const ref = db.collection("projects").doc(id);
 
   await db.runTransaction(async (tx) => {
+    // Trial projects live in a per-account namespace: the cap is checked first so
+    // a capped account cannot use name conflicts as an existence oracle, and
+    // name/slug uniqueness only looks at that account's own projects.
+    if (plan === "trial") {
+      const mine = await tx.get(
+        db
+          .collection("projects")
+          .where("ownerEmail", "==", ownerEmail)
+          .where("plan", "==", "trial")
+          .limit(TRIAL_MAX_PROJECTS),
+      );
+      if (mine.size >= TRIAL_MAX_PROJECTS) {
+        throw new ApiError(
+          403,
+          "trial_limit_reached",
+          `Trial accounts get ${TRIAL_MAX_PROJECTS} project. Deploy your own FireTrace for as many as you like.`,
+        );
+      }
+    }
+    const scoped = (q: FirebaseFirestore.Query) =>
+      plan === "trial" ? q.where("ownerEmail", "==", ownerEmail) : q;
     const [bySlug, byName] = await Promise.all([
-      tx.get(db.collection("projects").where("slug", "==", slug).limit(1)),
-      tx.get(db.collection("projects").where("name", "==", name).limit(1)),
+      tx.get(scoped(db.collection("projects").where("slug", "==", slug)).limit(1)),
+      tx.get(scoped(db.collection("projects").where("name", "==", name)).limit(1)),
     ]);
     if (!bySlug.empty || !byName.empty) {
       throw new ApiError(
@@ -78,6 +123,8 @@ export async function createProject(
       slug,
       description,
       ownerUid: input.ownerUid,
+      ownerEmail,
+      plan,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       lastTraceAt: null,
@@ -106,9 +153,13 @@ export async function updateProject(
   await db.runTransaction(async (tx) => {
     const current = await tx.get(ref);
     if (!current.exists) throw new ApiError(404, "not_found", "Project not found.");
+    const trialEmail =
+      current.get("plan") === "trial" ? String(current.get("ownerEmail") ?? "") : null;
+    const scoped = (q: FirebaseFirestore.Query) =>
+      trialEmail ? q.where("ownerEmail", "==", trialEmail) : q;
     const [bySlug, byName] = await Promise.all([
-      tx.get(db.collection("projects").where("slug", "==", slug).limit(2)),
-      tx.get(db.collection("projects").where("name", "==", name).limit(2)),
+      tx.get(scoped(db.collection("projects").where("slug", "==", slug)).limit(2)),
+      tx.get(scoped(db.collection("projects").where("name", "==", name)).limit(2)),
     ]);
     const clash = [...bySlug.docs, ...byName.docs].some((d) => d.id !== projectId);
     if (clash) {
@@ -236,10 +287,15 @@ export async function createApiKey(
     pepper: string;
     scopes?: KeyScope[];
     expiresAt?: Date | null;
+    /** Recorded on the key so trial keys can be switched off with trial mode. */
+    plan?: Plan;
+    /** Trial projects: refuse when this many keys (revoked included) already exist. */
+    maxKeys?: number;
   },
 ): Promise<{ key: ApiKeySummary; plaintext: string }> {
   await requireProject(db, input.projectId);
   const label = validateKeyLabel(input.label);
+  await assertKeyQuota(db, input.projectId, input.maxKeys);
   const generated = generateApiKey();
   const ref = db.collection("apiKeys").doc(generated.keyId);
   await ref.create({
@@ -253,6 +309,7 @@ export async function createApiKey(
     scopes: input.scopes?.length ? input.scopes : DEFAULT_KEY_SCOPES,
     expiresAt: input.expiresAt ? Timestamp.fromDate(input.expiresAt) : null,
     lastUsedAt: null,
+    plan: input.plan ?? "owner",
   });
   const snap = await ref.get();
   return { key: toApiKeySummary(snap.id, snap.data() ?? {}), plaintext: generated.plaintext };
@@ -268,10 +325,38 @@ export async function revokeApiKey(db: Firestore, projectId: string, keyId: stri
   await ref.update({ revokedAt: FieldValue.serverTimestamp() });
 }
 
+/** Trial projects may hold only a few keys (revoked ones count); owner projects are unlimited. */
+async function assertKeyQuota(
+  db: Firestore,
+  projectId: string,
+  maxKeys: number | undefined,
+): Promise<void> {
+  if (maxKeys === undefined) return;
+  const existing = await db
+    .collection("apiKeys")
+    .where("projectId", "==", projectId)
+    .limit(maxKeys)
+    .get();
+  if (existing.size >= maxKeys) {
+    throw new ApiError(
+      403,
+      "trial_limit_reached",
+      `Trial projects can hold ${maxKeys} API keys, revoked ones included. Deploy your own FireTrace for unlimited keys.`,
+    );
+  }
+}
+
 /** Rotate: revoke the old key and issue a new one with the same label, atomically. */
 export async function rotateApiKey(
   db: Firestore,
-  input: { projectId: string; keyId: string; createdByUid: string; pepper: string },
+  input: {
+    projectId: string;
+    keyId: string;
+    createdByUid: string;
+    pepper: string;
+    /** Trial projects: refuse when this many keys (revoked included) already exist. */
+    maxKeys?: number;
+  },
 ): Promise<{ key: ApiKeySummary; plaintext: string }> {
   const oldRef = db.collection("apiKeys").doc(input.keyId);
   const generated = generateApiKey();
@@ -281,6 +366,18 @@ export async function rotateApiKey(
     const old = await tx.get(oldRef);
     if (!old.exists || old.get("projectId") !== input.projectId) {
       throw new ApiError(404, "not_found", "API key not found in this project.");
+    }
+    if (input.maxKeys !== undefined) {
+      const existing = await tx.get(
+        db.collection("apiKeys").where("projectId", "==", input.projectId).limit(input.maxKeys),
+      );
+      if (existing.size >= input.maxKeys) {
+        throw new ApiError(
+          403,
+          "trial_limit_reached",
+          `Trial projects can hold ${input.maxKeys} API keys, revoked ones included. Deploy your own FireTrace for unlimited keys.`,
+        );
+      }
     }
     const label = `${old.get("label") ?? "key"}`.slice(0, 80);
     tx.update(oldRef, { revokedAt: FieldValue.serverTimestamp() });
@@ -295,6 +392,7 @@ export async function rotateApiKey(
       scopes: scopesFromDocument(old.get("scopes")),
       expiresAt: old.get("expiresAt") instanceof Timestamp ? old.get("expiresAt") : null,
       lastUsedAt: null,
+      plan: old.get("plan") === "trial" ? "trial" : "owner",
     });
   });
 

@@ -2,7 +2,7 @@
 
 Everything a program can do against a FireTrace deployment goes through the key-authenticated API under `/api/v1`. The dashboard uses a separate session cookie and never shares these routes. A machine-readable OpenAPI 3.1 document is served by every deployment at `GET /api/v1/openapi.json`, and `GET /api/v1` lists the endpoints.
 
-- Base URL: your deployment origin, e.g. `https://fire-trace.vercel.app`
+- Base URL: your deployment origin, e.g. `https://tracing.art3m1s.me`
 - Authentication: `Authorization: Bearer ft_live_<keyId>_<secret>`
 - Content type: JSON in, JSON out. Every response carries `X-Request-Id` and `Cache-Control: no-store`.
 - Errors: `{ "error": { "code", "message", "requestId" } }` with a matching HTTP status.
@@ -73,6 +73,8 @@ Record one complete, immutable trace. The body is `{ "schemaVersion": 1, "trace"
 | 429    | `quota_exhausted`: Firestore refused the write; retry later, nothing was stored    |
 
 Idempotency comes from the trace id: the SDK generates 32-hex ids, and a resend with the same body hash is a no-op.
+
+On instances that enable trial mode (`FIRETRACE_TRIAL_TRACE_LIMIT`), a trial account's project answers `403 trial_limit_reached` once the account has recorded its allotted traces; the message links to the deployment guide. Owner projects are never limited.
 
 ### `GET /api/v1/traces` — scope `traces:read`
 
@@ -170,7 +172,7 @@ The Model Context Protocol endpoint, documented in [mcp.md](./mcp.md). Same bear
 import { FireTrace, FireTraceApi } from "@firetrace/sdk";
 
 const api = new FireTraceApi({
-  endpoint: "https://fire-trace.vercel.app",
+  endpoint: "https://tracing.art3m1s.me",
   apiKey: process.env.FIRETRACE_API_KEY!,
 });
 const key = await api.getKey(); // verify scopes at startup
@@ -185,12 +187,12 @@ Read methods throw `FireTraceError` with `status`, `code`, and `requestId`; the 
 ### curl
 
 ```bash
-curl -s https://fire-trace.vercel.app/api/v1/traces?status=error&limit=5 \
+curl -s https://tracing.art3m1s.me/api/v1/traces?status=error&limit=5 \
   -H "Authorization: Bearer $FIRETRACE_API_KEY"
 ```
 
 ```bash
-curl -s -X DELETE https://fire-trace.vercel.app/api/v1/traces/42f38ac8295345a7a12c4e3f60d6da23 \
+curl -s -X DELETE https://tracing.art3m1s.me/api/v1/traces/42f38ac8295345a7a12c4e3f60d6da23 \
   -H "Authorization: Bearer $FIRETRACE_API_KEY"
 ```
 

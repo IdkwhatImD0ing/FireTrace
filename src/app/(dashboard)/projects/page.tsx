@@ -1,20 +1,25 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/EmptyState";
+import { TrialNotice } from "@/components/dashboard/TrialNotice";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { serverEnv } from "@/lib/env/server";
 import { adminDb } from "@/lib/firebase/admin";
-import { listProjects } from "@/lib/firetrace/projects";
+import { getTrialUsage, TRIAL_MAX_PROJECTS, trialSubject } from "@/lib/firetrace/trial";
 import { formatBytes, percentOfLimit, storageLevel } from "@/lib/firetrace/storage";
 import { formatDateTime } from "@/lib/format";
+import { listProjectsFor } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Projects" };
 
 export default async function ProjectsPage() {
-  await requireOwnerOrRedirect();
+  const owner = await requireOwnerOrRedirect();
   const env = serverEnv();
-  const projects = await listProjects(adminDb());
+  const db = adminDb();
+  const projects = await listProjectsFor(db, owner);
+  const trial = owner.role === "trial" ? await getTrialUsage(db, trialSubject(owner.email)) : null;
+  const canCreate = owner.role === "owner" || projects.length < TRIAL_MAX_PROJECTS;
   const totalBytes = projects.reduce((sum, p) => sum + p.estimatedBytes, 0);
   const level = storageLevel(totalBytes, env.storageLimitBytes);
 
@@ -25,8 +30,17 @@ export default async function ProjectsPage() {
           <p className="mono-label">Trace namespaces</p>
           <h1 className="mt-1 font-display text-5xl leading-none text-ink">Projects</h1>
         </div>
-        {projects.length > 0 && <CreateProjectDialog primary />}
+        {projects.length > 0 && canCreate && <CreateProjectDialog primary />}
       </div>
+
+      {trial && (
+        <TrialNotice
+          used={trial.tracesUsed}
+          limit={env.trialTraceLimit}
+          repositoryUrl={env.repositoryUrl}
+          viewer="trial"
+        />
+      )}
 
       {level !== "ok" && (
         <p
@@ -70,7 +84,14 @@ export default async function ProjectsPage() {
                   >
                     {p.name}
                   </Link>
-                  <p className="font-mono text-[11px] text-ink-3">{p.slug}</p>
+                  <p className="font-mono text-[11px] text-ink-3">
+                    {p.slug}
+                    {p.plan === "trial" && owner.role === "owner" && (
+                      <span className="ml-2 rounded border border-warn/60 bg-warn/10 px-1.5 py-0.5 uppercase tracking-wider text-ink-2">
+                        trial · {p.ownerEmail ?? p.ownerUid}
+                      </span>
+                    )}
+                  </p>
                 </div>
                 <Link href={`/projects/${p.id}/settings`} className="btn btn-ghost btn-sm">
                   Settings

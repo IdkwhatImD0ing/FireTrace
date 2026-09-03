@@ -3,7 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { NextRequest } from "next/server";
 import { ConfigError, serverEnv } from "@/lib/env/server";
 import { adminDb } from "@/lib/firebase/admin";
-import { authenticateApiKey, touchApiKey } from "@/lib/firetrace/api-auth";
+import { authenticateApiKey, requireTrialModeForKey, touchApiKey } from "@/lib/firetrace/api-auth";
 import { ApiError } from "@/lib/firetrace/errors";
 import { newRequestId } from "@/lib/firetrace/ids";
 import { log } from "@/lib/log";
@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
     const env = serverEnv();
     const db = adminDb();
     const auth = await authenticateApiKey(db, request.headers.get("authorization"), env.keyPepper);
+    requireTrialModeForKey(auth, env.trialTraceLimit);
     const backend = new FirestoreBackend(db, env, auth);
     const server = createFireTraceMcpServer(backend, { version: APP_VERSION });
     const transport = new WebStandardStreamableHTTPServerTransport({

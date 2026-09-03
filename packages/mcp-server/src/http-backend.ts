@@ -9,7 +9,7 @@ import {
 } from "./backend.ts";
 
 export interface HttpBackendOptions {
-  /** Deployment origin, e.g. https://fire-trace.vercel.app */
+  /** Deployment origin, e.g. https://tracing.art3m1s.me */
   endpoint: string;
   /** ft_live_... key. Its scopes decide which tools the server exposes. */
   apiKey: string;

@@ -7,7 +7,7 @@ Thanks for looking at FireTrace. This file covers the local setup, the commands,
 Prerequisites:
 
 - Node.js 22 or newer (`.node-version`).
-- pnpm 10 (`corepack enable` activates the version pinned in `package.json`; do not use npm or yarn, the lockfile is pnpm's).
+- pnpm 10 (`corepack enable` activates the version pinned in `package.json`; on Node 25+ Corepack is not bundled, so `npm install -g pnpm@10` instead. Do not use npm or yarn for the repo itself, the lockfile is pnpm's).
 - A Java JDK for the Firestore emulator (required by `pnpm emulators` and `pnpm test:integration`; see the [Firebase Local Emulator Suite install docs](https://firebase.google.com/docs/emulator-suite/install_and_configure) for the version).
 
 ```bash
@@ -22,21 +22,22 @@ For day-to-day work use the emulator configuration from the README quickstart (`
 
 All scripts live in `package.json`.
 
-| Command                 | Purpose                                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `pnpm dev`              | Dev server at <http://localhost:3000>                                                              |
-| `pnpm emulators`        | Auth (9099) and Firestore (8080) emulators, UI on 4000, project `demo-firetrace`                   |
-| `pnpm seed:emulator`    | Seed owner, project, key, and sample traces (requires `FIRETRACE_USE_EMULATORS=true` in the shell) |
-| `pnpm trace:example`    | Send a nested example trace via the SDK (`FIRETRACE_ENDPOINT`, `FIRETRACE_API_KEY`)                |
-| `pnpm typecheck`        | `tsc --noEmit` for the app (the SDK has its own: `pnpm sdk:typecheck`)                             |
-| `pnpm lint`             | ESLint (`eslint-config-next` core-web-vitals and TypeScript rules)                                 |
-| `pnpm format`           | Prettier write; `pnpm format:check` verifies                                                       |
-| `pnpm test`             | Unit tests                                                                                         |
-| `pnpm test:integration` | Emulator-backed integration tests                                                                  |
-| `pnpm test:e2e`         | Playwright browser tests                                                                           |
-| `pnpm build`            | Production build                                                                                   |
-| `pnpm sdk:build`        | Compile `packages/sdk-js` to `dist/`                                                               |
-| `pnpm firebase:deploy`  | Deploy rules, indexes, and Auth config to the project in `.firebaserc`; only for owners            |
+| Command                 | Purpose                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`              | Dev server at <http://localhost:3000>                                                                                          |
+| `pnpm emulators`        | Auth (9099) and Firestore (8080) emulators, UI on 4000, project `demo-firetrace`                                               |
+| `pnpm seed:emulator`    | Seed owner, project, key, and sample traces (requires `FIRETRACE_USE_EMULATORS=true` in the shell)                             |
+| `pnpm trace:example`    | Send a nested example trace via the SDK (`FIRETRACE_ENDPOINT`, `FIRETRACE_API_KEY`)                                            |
+| `pnpm typecheck`        | `tsc --noEmit` for the app (the SDK has its own: `pnpm sdk:typecheck`)                                                         |
+| `pnpm lint`             | ESLint (`eslint-config-next` core-web-vitals and TypeScript rules)                                                             |
+| `pnpm format`           | Prettier write; `pnpm format:check` verifies                                                                                   |
+| `pnpm test`             | Unit tests                                                                                                                     |
+| `pnpm test:integration` | Emulator-backed integration tests                                                                                              |
+| `pnpm test:e2e`         | Playwright browser tests                                                                                                       |
+| `pnpm build`            | Production build                                                                                                               |
+| `pnpm sdk:build`        | Compile `packages/sdk-js` to `dist/`                                                                                           |
+| `pnpm mcp:build`        | Compile `packages/mcp-server` to `dist/`; `pnpm mcp:typecheck` checks only; `pnpm mcp:stdio` runs the stdio bridge from source |
+| `pnpm firebase:deploy`  | Deploy rules, indexes, and Auth config to the project in `.firebaserc`; only for owners                                        |
 
 ## Test layers
 

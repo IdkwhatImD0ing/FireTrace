@@ -1,11 +1,5 @@
 {
   "auth": {
-    "authorizedDomains": [
-      "localhost",
-      "firetrace-d74df.firebaseapp.com",
-      "firetrace-d74df.web.app",
-      "fire-trace.vercel.app"
-    ],
     "providers": {
       "emailPassword": true,
       "googleSignIn": {
@@ -16,7 +10,8 @@
   },
   "firestore": {
     "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
+    "indexes": "firestore.indexes.json",
+    "location": "nam5"
   },
   "emulators": {
     "auth": {

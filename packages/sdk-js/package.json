@@ -1,6 +1,6 @@
 {
   "name": "@firetrace/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Record completed LLM and agent traces to a self-hosted FireTrace deployment.",
   "license": "MIT",
   "type": "module",

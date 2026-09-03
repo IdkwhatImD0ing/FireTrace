@@ -64,6 +64,8 @@ describe("buildServerEnv", () => {
       keyPepper: PEPPER,
       appUrl: "http://localhost:3000",
       storageLimitBytes: 1024 * 1024 * 1024,
+      trialTraceLimit: 0,
+      repositoryUrl: "https://github.com/IdkwhatImD0ing/FireTrace",
       useEmulators: false,
       authEmulatorHost: "127.0.0.1:9099",
       firestoreEmulatorHost: "127.0.0.1:8080",

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/IdkwhatImD0ing/FireTrace/blob/main/SECURITY.md
+    about: Please do not open a public issue for security problems. SECURITY.md explains how to report privately.
+  - name: Deployment help
+    url: https://github.com/IdkwhatImD0ing/FireTrace/blob/main/README.md#deploy-your-own
+    about: The README has the Firebase and Vercel guides and a prompt you can hand to an AI agent to deploy for you.

@@ -4,6 +4,7 @@ import { TraceExplorer } from "@/components/trace/TraceExplorer";
 import { normalizeIngestBody } from "@/lib/firetrace/normalize";
 import { sampleTraceRequest } from "@/lib/firetrace/sample";
 import type { SpanDetail, TraceDetail } from "@/lib/firetrace/types";
+import { trialTraceLimitFromEnv } from "@/lib/env/server";
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPOSITORY_URL ?? "https://github.com/IdkwhatImD0ing/FireTrace";
@@ -54,7 +55,11 @@ const POINTS = [
   },
 ];
 
+/** The trial invite must reflect the runtime environment, never a build-time snapshot. */
+export const dynamic = "force-dynamic";
+
 export default function LandingPage() {
+  const TRIAL_LIMIT = trialTraceLimitFromEnv();
   const preview = previewData();
   return (
     <div className="flex min-h-screen flex-col">
@@ -88,7 +93,7 @@ export default function LandingPage() {
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <a
-              href={`${REPO_URL}/blob/main/docs/vercel-deployment.md`}
+              href={`${REPO_URL}#deploy-your-own`}
               className="btn btn-primary"
               target="_blank"
               rel="noreferrer"
@@ -99,6 +104,16 @@ export default function LandingPage() {
               View GitHub
             </a>
           </div>
+          {TRIAL_LIMIT > 0 && (
+            <p className="mt-4 max-w-2xl text-sm text-ink-2" data-testid="trial-invite">
+              This instance is its owner&apos;s personal deployment. You can{" "}
+              <Link href="/login" className="underline">
+                sign in
+              </Link>{" "}
+              with any verified Google or email account and record up to {TRIAL_LIMIT} traces to try
+              it, then deploy your own for unlimited retention.
+            </p>
+          )}
         </section>
 
         <section aria-label="Product preview" className="pb-16">

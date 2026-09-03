@@ -7,8 +7,9 @@ import { ProjectSettingsForm } from "@/components/settings/ProjectSettingsForm";
 import { serverEnv } from "@/lib/env/server";
 import { adminDb } from "@/lib/firebase/admin";
 import { isProjectId } from "@/lib/firetrace/ids";
-import { getProject, listApiKeys } from "@/lib/firetrace/projects";
+import { listApiKeys } from "@/lib/firetrace/projects";
 import { formatBytes, percentOfLimit, storageLevel } from "@/lib/firetrace/storage";
+import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Project settings" };
@@ -16,12 +17,12 @@ export const metadata: Metadata = { title: "Project settings" };
 export default async function ProjectSettingsPage({
   params,
 }: PageProps<"/projects/[projectId]/settings">) {
-  await requireOwnerOrRedirect();
+  const owner = await requireOwnerOrRedirect();
   const { projectId } = await params;
   if (!isProjectId(projectId)) notFound();
   const env = serverEnv();
   const db = adminDb();
-  const project = await getProject(db, projectId);
+  const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
   const keys = await listApiKeys(db, projectId);
   const level = storageLevel(project.estimatedBytes, env.storageLimitBytes);

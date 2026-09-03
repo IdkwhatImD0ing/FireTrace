@@ -24,6 +24,8 @@ const state = vi.hoisted(() => ({
     keyPepper: "0123456789abcdef0123456789abcdef",
     appUrl: "http://localhost:3000",
     storageLimitBytes: 1024 * 1024 * 1024,
+    trialTraceLimit: 0,
+    repositoryUrl: "https://github.com/IdkwhatImD0ing/FireTrace",
     useEmulators: false,
     authEmulatorHost: "127.0.0.1:9099",
     firestoreEmulatorHost: "127.0.0.1:8080",
@@ -52,7 +54,12 @@ vi.mock("@/lib/firebase/admin", () => ({
 
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 
-const baseEnv = { allowedEmails: ["owner@example.com"], useEmulators: false, isProduction: true };
+const baseEnv = {
+  allowedEmails: ["owner@example.com"],
+  useEmulators: false,
+  isProduction: true,
+  trialTraceLimit: 0,
+};
 
 const decoded = (overrides: Record<string, unknown> = {}) => ({
   uid: "uid-1",
@@ -76,6 +83,7 @@ beforeEach(() => {
     allowedEmails: ["owner@example.com"],
     useEmulators: false,
     isProduction: false,
+    trialTraceLimit: 0,
   };
 });
 
@@ -86,13 +94,14 @@ describe("isAllowedIdentity", () => {
     ).toEqual({
       allowed: true,
       email: "owner@example.com",
+      role: "owner",
     });
   });
 
   it("matches emails case-insensitively and trims whitespace", () => {
     expect(
       isAllowedIdentity({ email: "  Owner@Example.COM ", email_verified: true }, baseEnv),
-    ).toEqual({ allowed: true, email: "owner@example.com" });
+    ).toEqual({ allowed: true, email: "owner@example.com", role: "owner" });
     expect(
       isAllowedIdentity(
         { email: "owner@example.com", email_verified: true },
@@ -135,23 +144,30 @@ describe("isAllowedIdentity", () => {
   });
 
   it("rejects everyone when the allowlist is empty outside emulator mode", () => {
-    const env = { allowedEmails: [], useEmulators: false, isProduction: false };
+    const env = { allowedEmails: [], useEmulators: false, isProduction: false, trialTraceLimit: 0 };
     expect(
       isAllowedIdentity({ email: "owner@example.com", email_verified: true }, env).allowed,
     ).toBe(false);
   });
 
   it("bypasses the allowlist only for emulators with an empty allowlist outside production", () => {
-    const bypass = { allowedEmails: [], useEmulators: true, isProduction: false };
+    const bypass = {
+      allowedEmails: [],
+      useEmulators: true,
+      isProduction: false,
+      trialTraceLimit: 0,
+    };
     expect(isAllowedIdentity({ email: "Dev@Example.com", email_verified: false }, bypass)).toEqual({
       allowed: true,
       email: "dev@example.com",
+      role: "owner",
     });
 
     const withList = {
       allowedEmails: ["owner@example.com"],
       useEmulators: true,
       isProduction: false,
+      trialTraceLimit: 0,
     };
     expect(
       isAllowedIdentity({ email: "dev@example.com", email_verified: true }, withList).allowed,
@@ -163,7 +179,12 @@ describe("isAllowedIdentity", () => {
       isAllowedIdentity({ email: "owner@example.com", email_verified: true }, withList).allowed,
     ).toBe(true);
 
-    const production = { allowedEmails: [], useEmulators: true, isProduction: true };
+    const production = {
+      allowedEmails: [],
+      useEmulators: true,
+      isProduction: true,
+      trialTraceLimit: 0,
+    };
     expect(
       isAllowedIdentity({ email: "dev@example.com", email_verified: true }, production).allowed,
     ).toBe(false);
@@ -207,6 +228,7 @@ describe("createSessionCookie", () => {
         email: "owner@example.com",
         name: "Owner",
         picture: "https://example.com/avatar.png",
+        role: "owner",
       },
     });
     expect(state.auth.verifyIdToken).toHaveBeenCalledWith("id-token", true);
@@ -256,6 +278,7 @@ describe("verifySessionCookieValue", () => {
       email: "owner@example.com",
       name: "Owner",
       picture: "https://example.com/avatar.png",
+      role: "owner",
     });
     expect(state.auth.verifySessionCookie).toHaveBeenCalledWith("cookie", true);
   });

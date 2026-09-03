@@ -20,7 +20,8 @@ In scope:
 
 - The Next.js application under `src/`, including authentication, session handling, ingestion, and dashboard actions.
 - `firestore.rules` and `firestore.indexes.json`.
-- The JavaScript SDK in `packages/sdk-js`.
+- The key-authenticated REST API under `/api/v1` and the MCP endpoint at `/api/mcp`, including API-key scopes and expiry.
+- The JavaScript SDK in `packages/sdk-js` and the MCP server package in `packages/mcp-server`.
 - The scripts under `scripts/` and the documentation's security guidance.
 
 Out of scope:

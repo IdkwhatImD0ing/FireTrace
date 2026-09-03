@@ -29,7 +29,7 @@ async function exchangeForSession(
   return { ok: false, error: body?.error?.message ?? `Sign-in failed (${res.status}).` };
 }
 
-export function LoginForm({ ready }: { ready: boolean }) {
+export function LoginForm({ ready, trialLimit = 0 }: { ready: boolean; trialLimit?: number }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
@@ -193,7 +193,9 @@ export function LoginForm({ ready }: { ready: boolean }) {
             }}
           >
             {mode === "signin"
-              ? "First time? Create the owner account"
+              ? trialLimit > 0
+                ? "First time? Create an account"
+                : "First time? Create the owner account"
               : "Have an account? Sign in"}
           </button>
           <button type="submit" className="btn btn-ghost" disabled={!ready || busy !== null}>
@@ -202,9 +204,11 @@ export function LoginForm({ ready }: { ready: boolean }) {
         </div>
       </form>
       <p className="text-xs leading-relaxed text-ink-3">
-        Only verified emails on this deployment&apos;s allowlist can open the dashboard. Google
-        accounts are verified automatically; email accounts must confirm the verification link
-        first.
+        {trialLimit > 0
+          ? `Allowlisted emails are owners; any other verified email gets a trial of ${trialLimit} traces on this instance. `
+          : "Only verified emails on this deployment's allowlist can open the dashboard. "}
+        Google accounts are verified automatically; email accounts must confirm the verification
+        link first.
       </p>
     </div>
   );

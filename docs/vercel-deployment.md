@@ -25,6 +25,7 @@ Add each variable under **Settings > Environment Variables** and tick the enviro
 | `FIRETRACE_KEY_PEPPER`                                   | required                       | required                             | Mark as **Sensitive**. Use the same value in every environment that shares a Firestore database, or keys created in one will not work in the other. |
 | `NEXT_PUBLIC_APP_URL`                                    | `https://<your-domain>`        | `https://<your-domain>` (see note)   | No trailing slash. Must be an absolute URL.                                                                                                         |
 | `FIRETRACE_STORAGE_LIMIT_BYTES`                          | optional                       | optional                             | Storage-warning allowance in bytes; default 1 GiB.                                                                                                  |
+| `FIRETRACE_TRIAL_TRACE_LIMIT`                            | optional                       | optional                             | Trial mode: lets accounts outside the allowlist sign in with one project and this many traces, ever. Unset/0 keeps the deployment private (README). |
 | `FIRETRACE_USE_EMULATORS`                                | do not set                     | do not set                           | `true` makes production refuse to start (`src/lib/env/server.ts`).                                                                                  |
 | `NEXT_PUBLIC_FIRETRACE_USE_EMULATORS`                    | do not set                     | do not set                           | Would point the browser at `127.0.0.1:9099`.                                                                                                        |
 | `FIREBASE_AUTH_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST` | do not set                     | do not set                           | Emulator addresses; only meaningful with the flag above.                                                                                            |
@@ -46,7 +47,7 @@ Deploy from the Vercel dashboard or by pushing to the production branch. Then:
 ## 4. Custom domains and Firebase authorized domains
 
 1. Add the domain under **Settings > Domains** in Vercel and complete DNS verification.
-2. Add the same hostname to Firebase's authorized domains (`firebase.json` > `auth.authorizedDomains` followed by `npx -y firebase-tools@latest deploy --only auth --project <PROJECT_ID>`, or **Authentication > Settings > Authorized domains** in the console). Sign-in on a hostname that is not authorized fails in the popup with `auth/unauthorized-domain`.
+2. Add the same hostname to Firebase's authorized domains (**Authentication > Settings > Authorized domains** in the console, or the Identity Toolkit API call in [firebase-setup.md](firebase-setup.md#5-authorized-domains); the Firebase CLI cannot do it). Sign-in on a hostname that is not authorized fails in the popup with `auth/unauthorized-domain`.
 3. Set `NEXT_PUBLIC_APP_URL` to `https://<your-domain>` and redeploy.
 
 The default `<project>.vercel.app` hostname also needs to be authorized if you sign in there.

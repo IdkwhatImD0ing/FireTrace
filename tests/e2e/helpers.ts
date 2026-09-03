@@ -7,7 +7,7 @@ import {
 } from "@playwright/test";
 import { sampleTraceRequest } from "../../src/lib/firetrace/sample";
 import type { IngestRequest } from "../../src/lib/firetrace/schema";
-import { OWNER } from "./accounts";
+import { AUTH_EMULATOR_HOST, E2E_PROJECT_ID, OWNER } from "./accounts";
 
 export { sampleTraceRequest };
 
@@ -92,4 +92,28 @@ export function postTrace(
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     data: body,
   });
+}
+
+/**
+ * Create a fresh verified email/password account in the Auth emulator. Used
+ * by the trial spec so every run (and every CI retry) starts with an account
+ * that has no trial history.
+ */
+export async function createVerifiedAccount(account: {
+  email: string;
+  password: string;
+  name: string;
+}): Promise<void> {
+  process.env.FIREBASE_AUTH_EMULATOR_HOST = AUTH_EMULATOR_HOST;
+  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const { deleteApp, getApps, initializeApp } = await import("firebase-admin/app");
+  const { getAuth } = await import("firebase-admin/auth");
+  const app = getApps()[0] ?? initializeApp({ projectId: E2E_PROJECT_ID });
+  await getAuth(app).createUser({
+    email: account.email,
+    password: account.password,
+    emailVerified: true,
+    displayName: account.name,
+  });
+  await deleteApp(app);
 }

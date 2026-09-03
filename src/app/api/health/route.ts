@@ -8,7 +8,11 @@ export const runtime = "nodejs";
 export async function GET() {
   const status = configStatus();
   const body = {
-    ok: status.firebaseConfigured && status.authConfigured && status.ingestConfigured,
+    ok:
+      status.firebaseConfigured &&
+      status.authConfigured &&
+      status.ingestConfigured &&
+      status.problems.length === 0,
     firebaseConfigured: status.firebaseConfigured,
     authConfigured: status.authConfigured,
     ingestConfigured: status.ingestConfigured,

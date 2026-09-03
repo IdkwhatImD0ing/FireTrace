@@ -9,6 +9,10 @@ export interface Project {
   slug: string;
   description: string;
   ownerUid: string;
+  /** Email of the creator when known; shown to owners so trial projects are attributable. */
+  ownerEmail: string | null;
+  /** owner = unlimited; trial = created by a trial account and subject to FIRETRACE_TRIAL_TRACE_LIMIT. */
+  plan: "owner" | "trial";
   createdAt: string;
   updatedAt: string;
   lastTraceAt: string | null;

@@ -1,11 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { requireAccessibleProject } from "@/lib/auth/access";
 import { requireOwner } from "@/lib/auth/session";
 import { serverEnv } from "@/lib/env/server";
 import { adminDb } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/firetrace/errors";
-import { isProjectId, isTraceId } from "@/lib/firetrace/ids";
+import { isTraceId } from "@/lib/firetrace/ids";
 import {
   createApiKey,
   createProject,
@@ -13,10 +14,10 @@ import {
   deleteTrace,
   revokeApiKey,
   rotateApiKey,
-  requireProject,
   updateProject,
 } from "@/lib/firetrace/projects";
 import { expiryFromPreset, normalizeScopes } from "@/lib/firetrace/scopes";
+import { effectivePlan, TRIAL_MAX_KEYS } from "@/lib/firetrace/trial";
 import type { ApiKeySummary } from "@/lib/firetrace/types";
 import { log } from "@/lib/log";
 
@@ -42,14 +43,15 @@ async function run<T>(name: string, fn: () => Promise<T>): Promise<ActionResult<
   }
 }
 
-function assertProjectId(projectId: string): void {
-  if (!isProjectId(projectId)) throw new ApiError(404, "not_found", "Project not found.");
-}
-
 export async function createProjectAction(input: { name: string; description?: string }) {
   return run("createProject", async () => {
     const owner = await requireOwner();
-    const project = await createProject(adminDb(), { ...input, ownerUid: owner.uid });
+    const project = await createProject(adminDb(), {
+      ...input,
+      ownerUid: owner.uid,
+      ownerEmail: owner.email,
+      plan: owner.role === "trial" ? "trial" : "owner",
+    });
     revalidatePath("/projects");
     return { projectId: project.id };
   });
@@ -60,8 +62,8 @@ export async function updateProjectAction(
   input: { name: string; description?: string },
 ) {
   return run("updateProject", async () => {
-    await requireOwner();
-    assertProjectId(projectId);
+    const owner = await requireOwner();
+    await requireAccessibleProject(adminDb(), owner, projectId);
     await updateProject(adminDb(), projectId, input);
     revalidatePath("/projects");
     revalidatePath(`/projects/${projectId}`);
@@ -72,10 +74,9 @@ export async function updateProjectAction(
 
 export async function deleteProjectAction(projectId: string, confirmName: string) {
   return run("deleteProject", async () => {
-    await requireOwner();
-    assertProjectId(projectId);
+    const owner = await requireOwner();
     const db = adminDb();
-    const project = await requireProject(db, projectId);
+    const project = await requireAccessibleProject(db, owner, projectId);
     if (confirmName.trim() !== project.name) {
       throw new ApiError(
         400,
@@ -96,14 +97,18 @@ export async function createApiKeyAction(
 ): Promise<ActionResult<{ key: ApiKeySummary; plaintext: string }>> {
   return run("createApiKey", async () => {
     const owner = await requireOwner();
-    assertProjectId(projectId);
+    const env = serverEnv();
+    const project = await requireAccessibleProject(adminDb(), owner, projectId);
+    const plan = effectivePlan(project, env.allowedEmails);
     const result = await createApiKey(adminDb(), {
       projectId,
       label: input.label,
       createdByUid: owner.uid,
-      pepper: serverEnv().keyPepper,
+      pepper: env.keyPepper,
       scopes: normalizeScopes(input.scopes),
       expiresAt: expiryFromPreset(input.expiry),
+      plan,
+      maxKeys: plan === "trial" ? TRIAL_MAX_KEYS : undefined,
     });
     revalidatePath(`/projects/${projectId}/settings`);
     revalidatePath(`/projects/${projectId}`);
@@ -113,8 +118,8 @@ export async function createApiKeyAction(
 
 export async function revokeApiKeyAction(projectId: string, keyId: string) {
   return run("revokeApiKey", async () => {
-    await requireOwner();
-    assertProjectId(projectId);
+    const owner = await requireOwner();
+    await requireAccessibleProject(adminDb(), owner, projectId);
     await revokeApiKey(adminDb(), projectId, keyId);
     revalidatePath(`/projects/${projectId}/settings`);
     return undefined;
@@ -127,12 +132,14 @@ export async function rotateApiKeyAction(
 ): Promise<ActionResult<{ key: ApiKeySummary; plaintext: string }>> {
   return run("rotateApiKey", async () => {
     const owner = await requireOwner();
-    assertProjectId(projectId);
+    const env = serverEnv();
+    const project = await requireAccessibleProject(adminDb(), owner, projectId);
     const result = await rotateApiKey(adminDb(), {
       projectId,
       keyId,
       createdByUid: owner.uid,
-      pepper: serverEnv().keyPepper,
+      pepper: env.keyPepper,
+      maxKeys: effectivePlan(project, env.allowedEmails) === "trial" ? TRIAL_MAX_KEYS : undefined,
     });
     revalidatePath(`/projects/${projectId}/settings`);
     return result;
@@ -141,8 +148,8 @@ export async function rotateApiKeyAction(
 
 export async function deleteTraceAction(projectId: string, traceId: string) {
   return run("deleteTrace", async () => {
-    await requireOwner();
-    assertProjectId(projectId);
+    const owner = await requireOwner();
+    await requireAccessibleProject(adminDb(), owner, projectId);
     if (!isTraceId(traceId)) throw new ApiError(404, "not_found", "Trace not found.");
     await deleteTrace(adminDb(), projectId, traceId);
     revalidatePath(`/projects/${projectId}`);

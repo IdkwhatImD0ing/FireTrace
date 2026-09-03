@@ -87,7 +87,11 @@ export class FirestoreBackend implements TraceBackend {
       const status = normalized.error.code === "payload_too_large" ? 413 : 400;
       throw new ApiError(status, normalized.error.code, normalized.error.message);
     }
-    const outcome = await ingestTrace(this.db, this.projectId, normalized.value);
+    const outcome = await ingestTrace(this.db, this.projectId, normalized.value, {
+      trialTraceLimit: this.env.trialTraceLimit,
+      repositoryUrl: this.env.repositoryUrl,
+      allowedEmails: this.env.allowedEmails,
+    });
     return {
       ok: true,
       traceId: normalized.value.trace.id,

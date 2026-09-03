@@ -59,3 +59,7 @@ ui-debug.log
 
 # workspace package build output
 packages/*/dist/
+
+# Firebase Admin SDK keys, however they were named when downloaded
+*service-account*.json
+*-firebase-adminsdk-*.json

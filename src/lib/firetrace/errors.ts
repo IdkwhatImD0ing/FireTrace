@@ -17,6 +17,7 @@ export type ApiErrorCode =
   | "conflict"
   | "payload_too_large"
   | "quota_exhausted"
+  | "trial_limit_reached"
   | "rate_limited"
   | "not_configured"
   | "internal_error";

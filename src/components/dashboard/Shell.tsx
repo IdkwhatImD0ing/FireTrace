@@ -21,6 +21,14 @@ export function Shell({ owner, children }: { owner: Owner; children: ReactNode }
             </Link>
           </nav>
           <div className="ml-auto flex items-center gap-3">
+            {owner.role === "trial" && (
+              <span
+                className="rounded border border-warn/60 bg-warn/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-2"
+                title="Trial account: limited traces on this instance"
+              >
+                trial
+              </span>
+            )}
             <span
               className="hidden truncate font-mono text-[11px] text-ink-3 sm:inline"
               title={owner.email}

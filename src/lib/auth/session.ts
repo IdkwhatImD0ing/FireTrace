@@ -16,11 +16,15 @@ import { ApiError } from "@/lib/firetrace/errors";
 export const SESSION_COOKIE = "firetrace_session";
 export const SESSION_TTL_MS = 5 * 24 * 60 * 60 * 1000;
 
+export type Role = "owner" | "trial";
+
 export interface Owner {
   uid: string;
   email: string;
   name: string | null;
   picture: string | null;
+  /** owner = on DASHBOARD_ALLOWED_EMAILS (sees everything); trial = capped guest, own projects only. */
+  role: Role;
 }
 
 export class NotAllowedError extends ApiError {
@@ -30,33 +34,37 @@ export class NotAllowedError extends ApiError {
   }
 }
 
-/** Pure allowlist decision. Exported for unit tests. */
+/**
+ * Pure allowlist decision. Allowlisted emails are owners. When trial mode is
+ * on (trialTraceLimit > 0) any other verified email becomes a trial user;
+ * otherwise it is rejected. Exported for unit tests.
+ */
 export function isAllowedIdentity(
   token: Pick<DecodedIdToken, "email" | "email_verified">,
-  env: Pick<ServerEnv, "allowedEmails" | "useEmulators" | "isProduction">,
-): { allowed: true; email: string } | { allowed: false; reason: string } {
+  env: Pick<ServerEnv, "allowedEmails" | "useEmulators" | "isProduction" | "trialTraceLimit">,
+): { allowed: true; email: string; role: Role } | { allowed: false; reason: string } {
   const email = token.email?.trim().toLowerCase();
   if (!email) return { allowed: false, reason: "The signed-in account has no email address." };
   const emulatorBypass = env.useEmulators && !env.isProduction && env.allowedEmails.length === 0;
-  if (emulatorBypass) return { allowed: true, email };
+  if (emulatorBypass) return { allowed: true, email, role: "owner" };
   if (!token.email_verified) {
     return {
       allowed: false,
       reason: "Verify the email address on this account, then sign in again.",
     };
   }
-  if (!env.allowedEmails.includes(email)) {
-    return { allowed: false, reason: `${email} is not in the dashboard allowlist.` };
-  }
-  return { allowed: true, email };
+  if (env.allowedEmails.includes(email)) return { allowed: true, email, role: "owner" };
+  if (env.trialTraceLimit > 0) return { allowed: true, email, role: "trial" };
+  return { allowed: false, reason: `${email} is not in the dashboard allowlist.` };
 }
 
-function ownerFromToken(token: DecodedIdToken, email: string): Owner {
+function ownerFromToken(token: DecodedIdToken, email: string, role: Role): Owner {
   return {
     uid: token.uid,
     email,
     name: typeof token.name === "string" ? token.name : null,
     picture: typeof token.picture === "string" ? token.picture : null,
+    role,
   };
 }
 
@@ -79,7 +87,7 @@ export async function createSessionCookie(
   const decision = isAllowedIdentity(decoded, env);
   if (!decision.allowed) throw new NotAllowedError(decision.reason);
   const cookie = await auth.createSessionCookie(idToken, { expiresIn: SESSION_TTL_MS });
-  return { cookie, owner: ownerFromToken(decoded, decision.email) };
+  return { cookie, owner: ownerFromToken(decoded, decision.email, decision.role) };
 }
 
 export function sessionCookieOptions(env: ServerEnv) {
@@ -100,7 +108,7 @@ export async function verifySessionCookieValue(value: string | undefined): Promi
     const decoded = await adminAuth().verifySessionCookie(value, true);
     const decision = isAllowedIdentity(decoded, env);
     if (!decision.allowed) return null;
-    return ownerFromToken(decoded, decision.email);
+    return ownerFromToken(decoded, decision.email, decision.role);
   } catch {
     return null;
   }

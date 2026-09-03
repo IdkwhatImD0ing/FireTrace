@@ -7,6 +7,7 @@ import { z } from "zod";
  * ConfigError, and `configStatus()` reports booleans for the health endpoint.
  */
 const GIB = 1024 * 1024 * 1024;
+export const DEFAULT_REPOSITORY_URL = "https://github.com/IdkwhatImD0ing/FireTrace";
 
 const serverSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -16,6 +17,8 @@ const serverSchema = z.object({
   FIRETRACE_KEY_PEPPER: z.string().trim().optional(),
   NEXT_PUBLIC_APP_URL: z.string().default("http://localhost:3000"),
   FIRETRACE_STORAGE_LIMIT_BYTES: z.coerce.number().int().positive().default(GIB),
+  FIRETRACE_TRIAL_TRACE_LIMIT: z.coerce.number().int().min(0).default(0),
+  NEXT_PUBLIC_REPOSITORY_URL: z.string().trim().optional(),
   FIRETRACE_USE_EMULATORS: z.enum(["true", "false"]).default("false"),
   FIREBASE_AUTH_EMULATOR_HOST: z.string().optional(),
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
@@ -30,6 +33,10 @@ export interface ServerEnv {
   keyPepper: string;
   appUrl: string;
   storageLimitBytes: number;
+  /** >0 lets non-allowlisted accounts sign in as trial users with this many traces, ever. 0 = allowlist only. */
+  trialTraceLimit: number;
+  /** Public repository URL used in "deploy your own" messages. */
+  repositoryUrl: string;
   useEmulators: boolean;
   authEmulatorHost: string;
   firestoreEmulatorHost: string;
@@ -145,11 +152,24 @@ export function buildServerEnv(
       keyPepper: v.FIRETRACE_KEY_PEPPER as string,
       appUrl,
       storageLimitBytes: v.FIRETRACE_STORAGE_LIMIT_BYTES,
+      trialTraceLimit: v.FIRETRACE_TRIAL_TRACE_LIMIT,
+      repositoryUrl: v.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL,
       useEmulators,
       authEmulatorHost: v.FIREBASE_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099",
       firestoreEmulatorHost: v.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080",
     },
   };
+}
+
+/**
+ * Trial limit as a plain number for pages that must render even when the rest
+ * of the configuration is incomplete (login, landing). Never throws.
+ */
+export function trialTraceLimitFromEnv(
+  raw: string | undefined = process.env.FIRETRACE_TRIAL_TRACE_LIMIT,
+): number {
+  const n = Number(raw ?? 0);
+  return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
 let cached: ServerEnv | undefined;

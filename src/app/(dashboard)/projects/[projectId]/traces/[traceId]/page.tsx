@@ -6,8 +6,8 @@ import { DeleteTraceButton } from "@/components/trace/DeleteTraceButton";
 import { TraceExplorer } from "@/components/trace/TraceExplorer";
 import { adminDb } from "@/lib/firebase/admin";
 import { isProjectId, isTraceId } from "@/lib/firetrace/ids";
-import { getProject } from "@/lib/firetrace/projects";
 import { getTrace, listSpans } from "@/lib/firetrace/queries";
+import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 import {
   formatCost,
@@ -22,15 +22,14 @@ export const metadata: Metadata = { title: "Trace" };
 export default async function TracePage({
   params,
 }: PageProps<"/projects/[projectId]/traces/[traceId]">) {
-  await requireOwnerOrRedirect();
+  const owner = await requireOwnerOrRedirect();
   const { projectId, traceId } = await params;
   if (!isProjectId(projectId) || !isTraceId(traceId)) notFound();
   const db = adminDb();
-  const [project, trace] = await Promise.all([
-    getProject(db, projectId),
-    getTrace(db, projectId, traceId),
-  ]);
-  if (!project || !trace) notFound();
+  const project = await getAccessibleProject(db, owner, projectId);
+  if (!project) notFound();
+  const trace = await getTrace(db, projectId, traceId);
+  if (!trace) notFound();
   const spans = await listSpans(db, projectId, traceId);
 
   return (

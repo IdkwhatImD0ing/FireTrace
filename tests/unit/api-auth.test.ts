@@ -37,6 +37,7 @@ describe("requireScope", () => {
     scopes: ["traces:write"],
     expiresAt: null,
     lastUsedAt: null,
+    plan: "owner",
   };
 
   it("passes when the scope is present and throws 403 insufficient_scope otherwise", () => {

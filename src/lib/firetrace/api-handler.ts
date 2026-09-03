@@ -3,7 +3,13 @@ import type { NextRequest, NextResponse } from "next/server";
 import { ConfigError, serverEnv, type ServerEnv } from "@/lib/env/server";
 import { adminDb } from "@/lib/firebase/admin";
 import { log } from "@/lib/log";
-import { authenticateApiKey, requireScope, touchApiKey, type AuthenticatedKey } from "./api-auth";
+import {
+  authenticateApiKey,
+  requireScope,
+  requireTrialModeForKey,
+  touchApiKey,
+  type AuthenticatedKey,
+} from "./api-auth";
 import { ApiError, errorResponse, errorToResponse } from "./errors";
 import { newRequestId } from "./ids";
 import type { KeyScope } from "./scopes";
@@ -44,6 +50,7 @@ export function withApiKey(scope: KeyScope | null, handler: Handler) {
         request.headers.get("authorization"),
         env.keyPepper,
       );
+      requireTrialModeForKey(auth, env.trialTraceLimit);
       if (scope) requireScope(auth, scope);
       const params = ctx ? await ctx.params : {};
       const response = await handler({ db, env, auth, requestId, params }, request);

@@ -26,6 +26,7 @@ const errorSchema = {
             "trace_id_conflict",
             "payload_too_large",
             "quota_exhausted",
+            "trial_limit_reached",
             "not_configured",
             "internal_error",
           ],
@@ -142,7 +143,8 @@ const errorResponses = {
     content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
   },
   "403": {
-    description: "The key lacks the required scope",
+    description:
+      "The key lacks the required scope, or (on instances with trial mode) the account has used its trial traces (trial_limit_reached)",
     content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
   },
   "500": {

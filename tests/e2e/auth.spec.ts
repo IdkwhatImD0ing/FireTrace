@@ -22,17 +22,17 @@ test.describe("dashboard sign-in through the Auth emulator", () => {
     await page.waitForURL(/\/projects$/);
   });
 
-  test("a verified account that is not allowlisted is rejected and gets no session", async ({
+  test("a verified account outside the allowlist is admitted as a trial user (trial mode is on for the e2e server; the rejection path is covered by tests/integration/session.test.ts)", async ({
     page,
     context,
   }) => {
+    // The e2e server runs with FIRETRACE_TRIAL_TRACE_LIMIT=5, so a verified
+    // account outside the allowlist is admitted as a capped trial user.
     await signIn(page, OUTSIDER);
-    await expect(alerts(page)).toContainText("not in the dashboard allowlist");
-    await expect(page).toHaveURL(/\/login$/);
-    expect((await context.cookies()).some((c) => c.name === SESSION_COOKIE)).toBe(false);
-
-    await page.goto("/projects");
-    await expect(page).toHaveURL(/\/login$/);
+    await page.waitForURL(/\/projects$/);
+    await expect(page.getByText("trial", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("trial-status")).toContainText("0 of 5 traces used");
+    expect((await context.cookies()).some((c) => c.name === SESSION_COOKIE)).toBe(true);
   });
 
   test("a wrong password is rejected and gets no session", async ({ page, context }) => {

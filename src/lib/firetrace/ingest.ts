@@ -1,6 +1,7 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { ApiError, isQuotaExhausted } from "./errors";
 import type { NormalizedIngest, NormalizedSpan, NormalizedTrace } from "./normalize";
+import { effectivePlan, TRIAL_USAGE_COLLECTION, trialLimitMessage, trialSubject } from "./trial";
 
 export { authenticateApiKey, type AuthenticatedKey } from "./api-auth";
 
@@ -31,6 +32,21 @@ export function spanDocument(span: NormalizedSpan) {
 export type IngestOutcome =
   { created: true; duplicate: false } | { created: false; duplicate: true };
 
+export interface IngestOptions {
+  /** FIRETRACE_TRIAL_TRACE_LIMIT; 0 disables trial projects entirely. */
+  trialTraceLimit: number;
+  /** Linked from the limit-reached message. */
+  repositoryUrl: string;
+  /** DASHBOARD_ALLOWED_EMAILS: a trial project whose creator is now allowlisted is uncapped. */
+  allowedEmails: readonly string[];
+}
+
+const DEFAULT_INGEST_OPTIONS: IngestOptions = {
+  trialTraceLimit: 0,
+  repositoryUrl: "https://github.com/IdkwhatImD0ing/FireTrace",
+  allowedEmails: [],
+};
+
 /**
  * Idempotent, transactional insert of one immutable trace:
  *  - absent            -> write trace + spans + project counters (201)
@@ -41,6 +57,7 @@ export async function ingestTrace(
   db: Firestore,
   projectId: string,
   normalized: NormalizedIngest,
+  options: IngestOptions = DEFAULT_INGEST_OPTIONS,
 ): Promise<IngestOutcome> {
   const projectRef = db.collection("projects").doc(projectId);
   const traceRef = projectRef.collection("traces").doc(normalized.trace.id);
@@ -55,6 +72,24 @@ export async function ingestTrace(
           "The project for this API key no longer exists.",
         );
       }
+      // Trial projects draw from a per-account counter that never decreases.
+      // Read it before any write so the transaction stays valid.
+      const ownerEmail =
+        typeof projectSnap.get("ownerEmail") === "string"
+          ? (projectSnap.get("ownerEmail") as string)
+          : null;
+      const trial =
+        effectivePlan(
+          { plan: projectSnap.get("plan") === "trial" ? "trial" : "owner", ownerEmail },
+          options.allowedEmails,
+        ) === "trial";
+      const usageRef = trial
+        ? db
+            .collection(TRIAL_USAGE_COLLECTION)
+            .doc(trialSubject(ownerEmail ?? String(projectSnap.get("ownerUid") ?? "")))
+        : null;
+      const usageSnap = usageRef ? await tx.get(usageRef) : null;
+
       if (traceSnap.exists) {
         if (traceSnap.get("bodyHash") === normalized.bodyHash) {
           return { created: false, duplicate: true } as const;
@@ -63,6 +98,26 @@ export async function ingestTrace(
           409,
           "trace_id_conflict",
           `Trace ${normalized.trace.id} already exists with different content. Traces are immutable; use a new trace id.`,
+        );
+      }
+      if (usageRef) {
+        const used = usageSnap?.get("tracesUsed");
+        const tracesUsed = typeof used === "number" ? used : 0;
+        if (tracesUsed >= options.trialTraceLimit) {
+          throw new ApiError(
+            403,
+            "trial_limit_reached",
+            trialLimitMessage(options.trialTraceLimit, options.repositoryUrl),
+          );
+        }
+        tx.set(
+          usageRef,
+          {
+            tracesUsed: FieldValue.increment(1),
+            lastTraceAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
         );
       }
 

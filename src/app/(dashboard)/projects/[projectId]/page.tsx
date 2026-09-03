@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/EmptyState";
+import { TrialNotice } from "@/components/dashboard/TrialNotice";
 import { SetupPanel } from "@/components/traces/SetupPanel";
 import { StorageNotice } from "@/components/traces/StorageNotice";
 import { TraceFilters } from "@/components/traces/TraceFilters";
@@ -9,9 +10,11 @@ import { TraceTable } from "@/components/traces/TraceTable";
 import { serverEnv } from "@/lib/env/server";
 import { adminDb } from "@/lib/firebase/admin";
 import { isProjectId } from "@/lib/firetrace/ids";
-import { getProject, listApiKeys } from "@/lib/firetrace/projects";
+import { listApiKeys } from "@/lib/firetrace/projects";
+import { effectivePlan, getTrialUsage, trialSubject } from "@/lib/firetrace/trial";
 import { listTraces, parseTraceFilters, recentModels } from "@/lib/firetrace/queries";
 import { formatBytes } from "@/lib/firetrace/storage";
+import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Traces" };
@@ -31,14 +34,18 @@ export default async function ProjectTracesPage({
   params,
   searchParams,
 }: PageProps<"/projects/[projectId]">) {
-  await requireOwnerOrRedirect();
+  const owner = await requireOwnerOrRedirect();
   const { projectId } = await params;
   if (!isProjectId(projectId)) notFound();
   const sp = await searchParams;
   const env = serverEnv();
   const db = adminDb();
-  const project = await getProject(db, projectId);
+  const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
+  const trial =
+    effectivePlan(project, env.allowedEmails) === "trial"
+      ? await getTrialUsage(db, trialSubject(project.ownerEmail ?? project.ownerUid))
+      : null;
 
   const filters = parseTraceFilters(sp);
   const after = first(sp.after);
@@ -85,6 +92,16 @@ export default async function ProjectTracesPage({
       </div>
 
       <StorageNotice estimatedBytes={project.estimatedBytes} limitBytes={env.storageLimitBytes} />
+
+      {trial && (
+        <TrialNotice
+          used={trial.tracesUsed}
+          limit={env.trialTraceLimit}
+          repositoryUrl={env.repositoryUrl}
+          viewer={owner.role}
+          ownerEmail={project.ownerEmail}
+        />
+      )}
 
       {project.traceCount === 0 && !filtering ? (
         <>

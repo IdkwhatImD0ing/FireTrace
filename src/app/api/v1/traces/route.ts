@@ -18,7 +18,7 @@ export const runtime = "nodejs";
  *   Authorization: Bearer ft_live_<keyId>_<secret>   (scope traces:write)
  *   Body: { schemaVersion: 1, trace: {...} }  (see docs/api.md)
  */
-export const POST = withApiKey("traces:write", async ({ db, auth, requestId }, request) => {
+export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId }, request) => {
   const startedAt = Date.now();
   const tooLarge = () =>
     new ApiError(413, "payload_too_large", `Request body exceeds ${LIMITS.maxRequestBytes} bytes.`);
@@ -41,7 +41,11 @@ export const POST = withApiKey("traces:write", async ({ db, auth, requestId }, r
     throw new ApiError(status, normalized.error.code, normalized.error.message);
   }
 
-  const outcome = await ingestTrace(db, auth.projectId, normalized.value);
+  const outcome = await ingestTrace(db, auth.projectId, normalized.value, {
+    trialTraceLimit: env.trialTraceLimit,
+    repositoryUrl: env.repositoryUrl,
+    allowedEmails: env.allowedEmails,
+  });
   log("info", "ingest.stored", {
     requestId,
     projectId: auth.projectId,

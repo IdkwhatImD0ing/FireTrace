@@ -7,7 +7,7 @@ import type { JsonObject, JsonValue, SpanKind, TraceStatus, Usage } from "./type
  * never links the read surface.
  */
 export interface FireTraceApiOptions {
-  /** Deployment origin, e.g. https://fire-trace.vercel.app (the /api/v1/traces suffix is tolerated). */
+  /** Deployment origin, e.g. https://tracing.art3m1s.me (the /api/v1/traces suffix is tolerated). */
   endpoint: string;
   apiKey: string;
   fetch?: typeof fetch;

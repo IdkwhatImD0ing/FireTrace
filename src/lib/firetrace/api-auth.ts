@@ -9,6 +9,8 @@ export interface AuthenticatedKey {
   scopes: KeyScope[];
   expiresAt: Date | null;
   lastUsedAt: Date | null;
+  /** Plan of the project when the key was issued; trial keys die with trial mode. */
+  plan: "owner" | "trial";
 }
 
 /** How often `lastUsedAt` is refreshed for a busy key (avoids a write per request). */
@@ -62,7 +64,23 @@ export async function authenticateApiKey(
     scopes: scopesFromDocument(data.scopes),
     expiresAt: data.expiresAt instanceof Timestamp ? data.expiresAt.toDate() : null,
     lastUsedAt: data.lastUsedAt instanceof Timestamp ? data.lastUsedAt.toDate() : null,
+    plan: data.plan === "trial" ? "trial" : "owner",
   };
+}
+
+/**
+ * Keys issued for trial projects stop working entirely once trial mode is
+ * switched off, so a former trial user cannot keep reading or deleting
+ * through the API after they can no longer sign in.
+ */
+export function requireTrialModeForKey(auth: AuthenticatedKey, trialTraceLimit: number): void {
+  if (auth.plan === "trial" && trialTraceLimit <= 0) {
+    throw new ApiError(
+      401,
+      "invalid_api_key",
+      "Trial mode is switched off on this instance; keys of trial projects are disabled.",
+    );
+  }
 }
 
 /** 403 unless the key carries `scope`. */

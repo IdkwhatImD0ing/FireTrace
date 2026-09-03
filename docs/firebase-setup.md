@@ -44,7 +44,12 @@ In the console open **Build > Firestore Database > Create database** and choose:
 - **Location:** a region close to where Vercel will run your functions. **The location cannot be changed after creation**; moving later means creating a new database and migrating data yourself.
 - **Security rules:** start in production mode. FireTrace deploys its own deny-all rules in step 7 regardless.
 
-If you prefer the command line and have the Google Cloud SDK, the equivalent is `gcloud firestore databases create --location=<REGION> --project=<PROJECT_ID>`.
+Two command-line alternatives:
+
+- Set the location in `firebase.json` (`"firestore": { "rules": ..., "indexes": ..., "location": "<REGION>" }`) and let step 7's `deploy --only firestore` create the database: firebase-tools 15 creates a missing `(default)` database during that deploy, in Standard edition and Native mode, at `firestore.location` **or in `nam5` when the key is absent**. Pin the location before the first deploy.
+- With the Google Cloud SDK: `gcloud firestore databases create --location=<REGION> --type=firestore-native --edition=standard --project=<PROJECT_ID>`.
+
+Either way, confirm afterwards with `npx -y firebase-tools@latest firestore:databases:list --project <PROJECT_ID>`.
 
 FireTrace never enables a Firestore TTL policy. Do not add one; age-based deletion is explicitly out of scope.
 
@@ -55,7 +60,6 @@ The committed `firebase.json` contains an `auth` block that the Firebase CLI can
 ```json
 {
   "auth": {
-    "authorizedDomains": ["localhost", "<PROJECT_ID>.firebaseapp.com", "<PROJECT_ID>.web.app"],
     "providers": {
       "emailPassword": true,
       "googleSignIn": {
@@ -78,7 +82,7 @@ npx -y firebase-tools@latest deploy --only auth --project <PROJECT_ID>
 
 If your CLI version rejects the `auth` target, enable the providers in the console instead: **Build > Authentication > Get started > Sign-in method > Google > Enable**, then set the support email.
 
-The committed `firebase.json` in this repository contains the original author's project domains and support email; replace them with yours.
+The committed `firebase.json` in this repository contains the original author's support email and Firestore location; replace them with yours. The CLI deploys providers only; authorized domains are handled in the next step.
 
 ## 5. Authorized domains
 
@@ -89,7 +93,29 @@ Firebase only completes sign-in on hostnames listed under **Authentication > Set
 - your Vercel production hostname (`<project>.vercel.app`),
 - any custom domain you attach in Vercel.
 
-Add them to `authorizedDomains` in `firebase.json` and run the `deploy --only auth` command again, or add them in the console. Entries are exact hostnames; preview deployments with generated hostnames must be added individually if you want to sign in on them.
+Firebase adds the first three itself. **The Firebase CLI does not manage this list** (`deploy --only auth` reads only the providers, and an `authorizedDomains` key in `firebase.json` is ignored), so add the Vercel hostname and any custom domain in one of two ways. Entries are exact hostnames; preview deployments with generated hostnames must be added individually if you want to sign in on them.
+
+1. Console: **Authentication > Settings > Authorized domains > Add domain**.
+2. Identity Toolkit API with a `gcloud` token. Read the current list, then write it back with the new hostname appended; the body replaces the whole list.
+
+```bash
+TOKEN=$(gcloud auth print-access-token)
+curl -s -H "Authorization: Bearer $TOKEN" -H "x-goog-user-project: <PROJECT_ID>" \
+  https://identitytoolkit.googleapis.com/admin/v2/projects/<PROJECT_ID>/config
+curl -s -X PATCH "https://identitytoolkit.googleapis.com/admin/v2/projects/<PROJECT_ID>/config?updateMask=authorizedDomains" \
+  -H "Authorization: Bearer $TOKEN" -H "x-goog-user-project: <PROJECT_ID>" -H "Content-Type: application/json" \
+  -d '{"authorizedDomains":["localhost","<PROJECT_ID>.firebaseapp.com","<PROJECT_ID>.web.app","<project>.vercel.app"]}'
+```
+
+PowerShell (where `curl` is an alias of `Invoke-WebRequest`):
+
+```powershell
+$h = @{ Authorization = "Bearer $(gcloud auth print-access-token)"; 'x-goog-user-project' = '<PROJECT_ID>' }
+Invoke-RestMethod -Headers $h https://identitytoolkit.googleapis.com/admin/v2/projects/<PROJECT_ID>/config
+Invoke-RestMethod -Method Patch -Headers $h -ContentType 'application/json' `
+  -Body '{"authorizedDomains":["localhost","<PROJECT_ID>.firebaseapp.com","<PROJECT_ID>.web.app","<project>.vercel.app"]}' `
+  'https://identitytoolkit.googleapis.com/admin/v2/projects/<PROJECT_ID>/config?updateMask=authorizedDomains'
+```
 
 ## 6. Associate the repository with the project
 

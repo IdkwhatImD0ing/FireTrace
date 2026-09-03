@@ -18,10 +18,10 @@ The package is not published to npm yet.
 # in the FireTrace clone
 pnpm install
 pnpm sdk:build                       # compiles packages/sdk-js/src -> dist/
-cd packages/sdk-js && pnpm pack      # writes firetrace-sdk-0.1.0.tgz (manifest points at dist/)
+cd packages/sdk-js && pnpm pack      # writes firetrace-sdk-0.2.0.tgz (manifest points at dist/)
 
 # in your project
-pnpm add /path/to/firetrace-sdk-0.1.0.tgz
+pnpm add /path/to/firetrace-sdk-0.2.0.tgz
 ```
 
 `pnpm pack` applies the `publishConfig` in `packages/sdk-js/package.json`, so the tarball's entry points are the compiled `dist/index.js` and `dist/index.d.ts`. Installing the directory itself (`pnpm add /path/to/packages/sdk-js`) instead resolves to the TypeScript source and needs a TypeScript-aware loader such as `tsx`.
@@ -195,3 +195,26 @@ Responses: `201` stored, `200` identical duplicate, `400` invalid, `401` bad key
 ## License
 
 MIT, see [LICENSE](../../LICENSE).
+
+## Reading and deleting traces
+
+`FireTraceApi` wraps the key-authenticated read side of the API ([docs/api.md](../../docs/api.md)). It needs a key with the `traces:read` scope (and `traces:delete` for `deleteTrace`); the recording client's default keys have `traces:write` + `traces:read`.
+
+```ts
+import { FireTrace, FireTraceApi } from "@firetrace/sdk";
+
+const api = new FireTraceApi({
+  endpoint: process.env.FIRETRACE_ENDPOINT!,
+  apiKey: process.env.FIRETRACE_API_KEY!,
+});
+// or, from an existing recording client: client.api()
+
+const key = await api.getKey(); // { keyId, projectId, scopes, expiresAt, lastUsedAt }
+const page = await api.listTraces({ status: "error", limit: 20 }); // { traces, nextCursor, prevCursor, pageSize }
+for await (const trace of api.iterateTraces({ model: "example-model" })) console.log(trace.id);
+const detail = await api.getTrace(page.traces[0].id); // { trace, spans } or null
+await api.deleteTrace(page.traces[0].id); // requires traces:delete
+const project = await api.getProject(); // counters, storage estimate, key scopes
+```
+
+Unlike `trace.end()`, these methods throw `FireTraceError` (with `status`, `code`, `requestId`) on any non-2xx response; `getTrace` turns a 404 into `null`. There are no automatic retries on the read side.

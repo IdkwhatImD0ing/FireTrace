@@ -86,7 +86,13 @@ describe("verifyApiKey", () => {
     const key = generateApiKey();
     const stored = hashApiKey(key.plaintext, PEPPER);
     expect(verifyApiKey(generateApiKey().plaintext, PEPPER, stored)).toBe(false);
-    expect(verifyApiKey(key.plaintext.slice(0, -1) + "0", PEPPER, stored)).toBe(false);
+    expect(
+      verifyApiKey(
+        key.plaintext.slice(0, -1) + (key.plaintext.endsWith("0") ? "1" : "0"),
+        PEPPER,
+        stored,
+      ),
+    ).toBe(false);
     expect(verifyApiKey("", PEPPER, stored)).toBe(false);
   });
 

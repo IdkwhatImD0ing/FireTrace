@@ -56,6 +56,8 @@ export function toProject(id: string, d: DocumentData): Project {
     slug: str(d.slug) ?? id,
     description: str(d.description) ?? "",
     ownerUid: str(d.ownerUid) ?? "",
+    ownerEmail: str(d.ownerEmail),
+    plan: d.plan === "trial" ? "trial" : "owner",
     createdAt: iso(d.createdAt) ?? new Date(0).toISOString(),
     updatedAt: iso(d.updatedAt) ?? new Date(0).toISOString(),
     lastTraceAt: iso(d.lastTraceAt),

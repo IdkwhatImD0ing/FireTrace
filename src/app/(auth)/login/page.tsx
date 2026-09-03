@@ -5,7 +5,7 @@ import { Brand } from "@/components/Brand";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { getOwner } from "@/lib/auth/session";
 import { clientEnvProblems } from "@/lib/env/client";
-import { configStatus } from "@/lib/env/server";
+import { configStatus, trialTraceLimitFromEnv } from "@/lib/env/server";
 
 export const metadata: Metadata = { title: "Sign in" };
 
@@ -21,6 +21,7 @@ export default async function LoginPage() {
   const clientProblems = clientEnvProblems();
   const ready = status.authConfigured && status.firebaseConfigured && clientProblems.length === 0;
   const showDetails = process.env.NODE_ENV !== "production";
+  const trialLimit = trialTraceLimitFromEnv();
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4 py-12">
@@ -31,7 +32,11 @@ export default async function LoginPage() {
         <h1 className="mt-8 font-display text-4xl leading-[1.05] text-ink">
           Open the <em className="text-ember-2">record.</em>
         </h1>
-        <p className="mt-2 text-sm text-ink-2">Sign in with an allowlisted account.</p>
+        <p className="mt-2 text-sm text-ink-2">
+          {trialLimit > 0
+            ? `Sign in with an allowlisted account. Any other verified account gets a trial: ${trialLimit} traces on this instance, then a pointer to deploy your own.`
+            : "Sign in with an allowlisted account."}
+        </p>
 
         {!ready && (
           <div
@@ -55,7 +60,7 @@ export default async function LoginPage() {
         )}
 
         <div className="mt-8">
-          <LoginForm ready={ready} />
+          <LoginForm ready={ready} trialLimit={trialLimit} />
         </div>
       </div>
     </main>

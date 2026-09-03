@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { requireAccessibleProject } from "@/lib/auth/access";
 import { requireOwner } from "@/lib/auth/session";
 import { adminDb } from "@/lib/firebase/admin";
 import { ApiError, errorToResponse, NO_STORE_HEADERS } from "@/lib/firetrace/errors";
@@ -17,10 +18,11 @@ export async function GET(
 ) {
   const requestId = newRequestId();
   try {
-    await requireOwner();
+    const owner = await requireOwner();
     const { projectId, traceId } = await ctx.params;
     if (!isProjectId(projectId)) throw new ApiError(404, "not_found", "Project not found.");
     const db = adminDb();
+    await requireAccessibleProject(db, owner, projectId);
     const trace = await getTrace(db, projectId, traceId);
     if (!trace) throw new ApiError(404, "not_found", "Trace not found.");
     const spans = await listSpans(db, projectId, traceId);
