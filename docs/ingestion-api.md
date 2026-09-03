@@ -1,5 +1,7 @@
 # Ingestion API reference
 
+This page covers `POST /api/v1/traces` in depth. The rest of the key-authenticated API (list, read, delete, project, key, OpenAPI) is documented in [api.md](./api.md) and the MCP server in [mcp.md](./mcp.md).
+
 FireTrace accepts completed traces over plain HTTPS so any language can integrate. This document is derived from `src/lib/firetrace/schema.ts` (wire schema and limits), `src/lib/firetrace/normalize.ts` (semantic checks and normalization), `src/lib/firetrace/ingest.ts` (authentication and the idempotent transaction), and `src/app/api/v1/traces/route.ts` (the route handler). When those files change, this document must change with them.
 
 ## Endpoint
@@ -281,7 +283,7 @@ SPAN_ID=$(openssl rand -hex 8)     # 16 hex characters
 
 ## Reading traces back
 
-There is no read API for API-key holders; keys can only write. Owners read traces in the dashboard, and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
+Keys with the `traces:read` scope can list and fetch traces through `GET /api/v1/traces` and `GET /api/v1/traces/{traceId}`, and `traces:delete` keys can remove them; see [api.md](./api.md). AI agents can do the same over MCP ([mcp.md](./mcp.md)). Recording requires the `traces:write` scope. Owners also read traces in the dashboard and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
 
 ## Versioning
 

@@ -1,6 +1,7 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore";
 import type { JsonObject, JsonValue, SpanKind, TraceStatus, Usage } from "./schema";
 import { SPAN_KINDS, STATUSES } from "./schema";
+import { scopesFromDocument } from "./scopes";
 import type {
   ApiKeySummary,
   Project,
@@ -74,6 +75,9 @@ export function toApiKeySummary(id: string, d: DocumentData): ApiKeySummary {
     createdAt: iso(d.createdAt) ?? new Date(0).toISOString(),
     createdByUid: str(d.createdByUid) ?? "",
     revokedAt: iso(d.revokedAt),
+    scopes: scopesFromDocument(d.scopes),
+    expiresAt: iso(d.expiresAt),
+    lastUsedAt: iso(d.lastUsedAt),
   };
 }
 

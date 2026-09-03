@@ -1,8 +1,9 @@
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { generateApiKey, hashApiKey } from "./api-keys";
 import { toApiKeySummary, toProject } from "./convert";
 import { ApiError } from "./errors";
 import { newProjectId } from "./ids";
+import { DEFAULT_KEY_SCOPES, scopesFromDocument, type KeyScope } from "./scopes";
 import type { ApiKeySummary, Project } from "./types";
 
 const DELETE_BATCH = 400;
@@ -228,7 +229,14 @@ export function validateKeyLabel(label: string): string {
 /** Returns the plaintext key exactly once. */
 export async function createApiKey(
   db: Firestore,
-  input: { projectId: string; label: string; createdByUid: string; pepper: string },
+  input: {
+    projectId: string;
+    label: string;
+    createdByUid: string;
+    pepper: string;
+    scopes?: KeyScope[];
+    expiresAt?: Date | null;
+  },
 ): Promise<{ key: ApiKeySummary; plaintext: string }> {
   await requireProject(db, input.projectId);
   const label = validateKeyLabel(input.label);
@@ -242,6 +250,9 @@ export async function createApiKey(
     createdAt: FieldValue.serverTimestamp(),
     createdByUid: input.createdByUid,
     revokedAt: null,
+    scopes: input.scopes?.length ? input.scopes : DEFAULT_KEY_SCOPES,
+    expiresAt: input.expiresAt ? Timestamp.fromDate(input.expiresAt) : null,
+    lastUsedAt: null,
   });
   const snap = await ref.get();
   return { key: toApiKeySummary(snap.id, snap.data() ?? {}), plaintext: generated.plaintext };
@@ -281,6 +292,9 @@ export async function rotateApiKey(
       createdAt: FieldValue.serverTimestamp(),
       createdByUid: input.createdByUid,
       revokedAt: null,
+      scopes: scopesFromDocument(old.get("scopes")),
+      expiresAt: old.get("expiresAt") instanceof Timestamp ? old.get("expiresAt") : null,
+      lastUsedAt: null,
     });
   });
 

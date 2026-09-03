@@ -16,6 +16,7 @@ import {
   requireProject,
   updateProject,
 } from "@/lib/firetrace/projects";
+import { expiryFromPreset, normalizeScopes } from "@/lib/firetrace/scopes";
 import type { ApiKeySummary } from "@/lib/firetrace/types";
 import { log } from "@/lib/log";
 
@@ -91,16 +92,18 @@ export async function deleteProjectAction(projectId: string, confirmName: string
 
 export async function createApiKeyAction(
   projectId: string,
-  label: string,
+  input: { label: string; scopes: string[]; expiry?: string },
 ): Promise<ActionResult<{ key: ApiKeySummary; plaintext: string }>> {
   return run("createApiKey", async () => {
     const owner = await requireOwner();
     assertProjectId(projectId);
     const result = await createApiKey(adminDb(), {
       projectId,
-      label,
+      label: input.label,
       createdByUid: owner.uid,
       pepper: serverEnv().keyPepper,
+      scopes: normalizeScopes(input.scopes),
+      expiresAt: expiryFromPreset(input.expiry),
     });
     revalidatePath(`/projects/${projectId}/settings`);
     revalidatePath(`/projects/${projectId}`);

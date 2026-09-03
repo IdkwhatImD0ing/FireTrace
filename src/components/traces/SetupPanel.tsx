@@ -46,6 +46,23 @@ export function curlExample(endpoint: string): string {
   }'`;
 }
 
+/** MCP client configuration (Claude Code, Claude Desktop, Cursor, …) for the remote endpoint. */
+export function mcpExample(appUrl: string): string {
+  return `{
+  "mcpServers": {
+    "firetrace": {
+      "type": "http",
+      "url": "${appUrl}/api/mcp",
+      "headers": { "Authorization": "Bearer ft_live_..." }
+    }
+  }
+}`;
+}
+
+export function mcpStdioExample(appUrl: string): string {
+  return `FIRETRACE_ENDPOINT=${appUrl} FIRETRACE_API_KEY=ft_live_... npx @firetrace/mcp`;
+}
+
 export function SetupPanel({
   projectId,
   appUrl,
@@ -66,7 +83,8 @@ export function SetupPanel({
           </h2>
           <p className="mt-1 text-sm text-ink-2">
             One POST per completed run. Full reference in{" "}
-            <code className="font-mono text-ink">docs/ingestion-api.md</code>.
+            <code className="font-mono text-ink">docs/api.md</code>; agents can also work with
+            traces over MCP (<code className="font-mono text-ink">docs/mcp.md</code>).
           </p>
         </div>
         <Link href={`/projects/${projectId}/settings`} className="btn btn-ghost btn-sm">
@@ -96,7 +114,8 @@ export function SetupPanel({
               <span>
                 {redactedKeyReference(activeKeys[0].id, activeKeys[0].lastFour)}{" "}
                 <span className="text-ink-3">
-                  ({activeKeys[0].label}; plaintext shown once at creation)
+                  ({activeKeys[0].label}; scopes {activeKeys[0].scopes.join(", ")}; plaintext shown
+                  once at creation)
                 </span>
               </span>
             )}
@@ -118,6 +137,28 @@ export function SetupPanel({
             <CopyButton text={curlExample(endpoint)} />
           </div>
           <pre className="pre mt-1.5 overflow-x-auto">{curlExample(endpoint)}</pre>
+        </div>
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="mono-label">MCP · remote (Claude Code, Cursor, Desktop)</span>
+            <CopyButton text={mcpExample(appUrl)} />
+          </div>
+          <pre className="pre mt-1.5 overflow-x-auto">{mcpExample(appUrl)}</pre>
+          <p className="mt-1.5 text-xs text-ink-3">
+            Tools offered follow the key&apos;s scopes: read keys can list and inspect traces, write
+            keys can record them, delete keys can remove them.
+          </p>
+        </div>
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="mono-label">MCP · stdio bridge</span>
+            <CopyButton text={mcpStdioExample(appUrl)} />
+          </div>
+          <pre className="pre mt-1.5 overflow-x-auto">{mcpStdioExample(appUrl)}</pre>
+          <p className="mt-1.5 text-xs text-ink-3">
+            For clients that only speak stdio. It calls the REST API with the same key; no Firebase
+            credentials leave the deployment.
+          </p>
         </div>
       </div>
     </section>

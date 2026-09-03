@@ -15,9 +15,10 @@ Concretely, the codebase has no `expireAt` field, no Firestore TTL policy, no cl
 ## What you get
 
 - Multiple **projects** as trace namespaces inside one deployment.
-- Per-project **API keys** (`ft_live_…`) that are shown once, stored only as an HMAC digest, and can be revoked or rotated.
-- A language-neutral **ingestion API** (`POST /api/v1/traces`) that accepts one complete, immutable trace per request with idempotent retries.
-- A small **TypeScript SDK** (`packages/sdk-js`) with retries, redaction, content truncation, and safe error capture.
+- Per-project **API keys** (`ft_live_…`) that are shown once, stored only as an HMAC digest, carry **scopes** (`traces:write`, `traces:read`, `traces:delete`) and an optional expiry, and can be revoked or rotated.
+- A language-neutral **REST API** ([docs/api.md](docs/api.md), OpenAPI at `/api/v1/openapi.json`): `POST /api/v1/traces` records one complete, immutable trace with idempotent retries; `GET` routes list and read traces and the project; `DELETE` removes a trace explicitly.
+- An **MCP server** ([docs/mcp.md](docs/mcp.md)) so AI agents can list, inspect, record, and delete traces: a remote endpoint at `/api/mcp` on every deployment plus a stdio bridge (`packages/mcp-server`, `@firetrace/mcp`). Tools follow the key's scopes.
+- A small **TypeScript SDK** (`packages/sdk-js`) with retries, redaction, content truncation, safe error capture, and a read client for the API.
 - A **trace list** with status, model, session, user, and time-range filters, URL-backed filter state, and cursor pagination (50 per page).
 - A **trace page** with a span tree and duration waterfall, an inspector (Overview, Input, Output, Attributes, Events, Error), and a canonical-JSON download.
 - **Owner-only access**: Firebase sign-in, a server-verified session cookie, and an email allowlist. Firestore rules deny every direct client read and write.
@@ -49,14 +50,14 @@ One FireTrace deployment connects to one Firebase project. Inside it, `projects/
 
 - **All data access goes through the Firebase Admin SDK on the server** (`src/lib/firebase/admin.ts`, Node.js runtime only). The Firebase Web SDK is used in the browser for sign-in and nothing else (`src/lib/firebase/client.ts`). `firestore.rules` denies all direct client access.
 - **Dashboard identity**: the login page signs in with Firebase (Google popup, or email/password with a verified address), posts the ID token to `POST /api/auth/session`, and the server verifies it, checks `DASHBOARD_ALLOWED_EMAILS`, and sets an HTTP-only session cookie (`src/lib/auth/session.ts`). Every server read re-verifies the cookie and the allowlist.
-- **Ingestion**: `src/app/api/v1/traces/route.ts` authenticates the bearer key (`src/lib/firetrace/ingest.ts`), validates and normalizes the body with Zod (`src/lib/firetrace/schema.ts`, `normalize.ts`), hashes it canonically, and writes the trace, its spans, and the project counters in one Firestore transaction.
+- **API**: every `/api/v1` route and `/api/mcp` runs through `withApiKey` (`src/lib/firetrace/api-handler.ts`), which resolves the bearer key to a project and its scopes (`api-auth.ts`) and rejects missing scopes with `403 insufficient_scope`. Ingestion validates and normalizes the body with Zod (`src/lib/firetrace/schema.ts`, `normalize.ts`), hashes it canonically, and writes the trace, its spans, and the project counters in one Firestore transaction (`ingest.ts`). The MCP endpoint builds a stateless server per request over the same code paths (`src/lib/mcp/firestore-backend.ts`, `packages/mcp-server`).
 
 Firestore collections:
 
 | Path                                            | Contents                                                                                                                                        |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                 |
-| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, createdAt, createdByUid, revokedAt                                                          |
+| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                           |
 | `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, usage, cost, counts, bodyHash, estimatedBytes) |
 | `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                   |
 
@@ -232,7 +233,7 @@ curl -X POST https://your-deployment.example/api/v1/traces \
   }'
 ```
 
-Trace ids are 32 lowercase hex characters and span ids are 16; generate fresh random ids per run. A new trace returns `201`, an identical retry returns `200` with `"duplicate": true`, and the same id with different content returns `409`. The complete field reference, limits, and error codes are in [docs/ingestion-api.md](docs/ingestion-api.md).
+Trace ids are 32 lowercase hex characters and span ids are 16; generate fresh random ids per run. A new trace returns `201`, an identical retry returns `200` with `"duplicate": true`, and the same id with different content returns `409`. The complete field reference, limits, and error codes are in [docs/ingestion-api.md](docs/ingestion-api.md); the read, delete, and project endpoints are in [docs/api.md](docs/api.md), and agent access over MCP in [docs/mcp.md](docs/mcp.md).
 
 ## Repository layout
 
@@ -249,9 +250,10 @@ src/lib/auth/                 session.ts (cookie + allowlist), origin.ts (Origin
 src/lib/firetrace/            schema, normalize, hash, ids, tree, api-keys, ingest, projects, queries, storage, sample
 src/lib/actions.ts            server actions for dashboard mutations
 packages/sdk-js/              @firetrace/sdk (TypeScript, Node 22+)
+packages/mcp-server/          @firetrace/mcp (MCP tools, HTTP backend, stdio bridge)
 scripts/                      seed-emulator.ts, send-example-trace.ts
 tests/                        vitest unit (tests/unit) and emulator-backed integration (tests/integration) tests, server-only mock
-docs/                         firebase-setup, vercel-deployment, ingestion-api, security
+docs/                         firebase-setup, vercel-deployment, api, mcp, ingestion-api, security
 firebase.json                 emulator ports, Auth provider config, rules/indexes paths
 firestore.rules               deny all direct client access
 firestore.indexes.json        composite indexes and payload-field exemptions
@@ -259,22 +261,23 @@ firestore.indexes.json        composite indexes and payload-field exemptions
 
 ## Commands
 
-| Command                 | What it does                                                                                        |
-| ----------------------- | --------------------------------------------------------------------------------------------------- |
-| `pnpm dev`              | Next.js dev server on <http://localhost:3000>                                                       |
-| `pnpm build`            | Production build                                                                                    |
-| `pnpm typegen`          | Generate Next.js route types (`PageProps`, `RouteContext`); run once after cloning or adding routes |
-| `pnpm typecheck`        | `tsc --noEmit`                                                                                      |
-| `pnpm lint`             | ESLint                                                                                              |
-| `pnpm format`           | Prettier (write); `pnpm format:check` to verify                                                     |
-| `pnpm test`             | Vitest unit project (`tests/unit`, `packages/*/src`)                                                |
-| `pnpm test:integration` | Vitest integration project inside `firebase emulators:exec` (needs Java)                            |
-| `pnpm test:e2e`         | Playwright browser tests                                                                            |
-| `pnpm emulators`        | Start the Auth and Firestore emulators for project `demo-firetrace`                                 |
-| `pnpm seed:emulator`    | Seed owner, project, key, and sample traces (requires `FIRETRACE_USE_EMULATORS=true`)               |
-| `pnpm trace:example`    | Send a nested example trace with the SDK (`FIRETRACE_ENDPOINT`, `FIRETRACE_API_KEY`)                |
-| `pnpm firebase:deploy`  | Deploy Firestore rules and indexes and the Auth provider config from `firebase.json`                |
-| `pnpm sdk:build`        | Compile `packages/sdk-js` to `dist/`; `pnpm sdk:typecheck` to check only                            |
+| Command                 | What it does                                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`              | Next.js dev server on <http://localhost:3000>                                                                  |
+| `pnpm build`            | Production build                                                                                               |
+| `pnpm typegen`          | Generate Next.js route types (`PageProps`, `RouteContext`); run once after cloning or adding routes            |
+| `pnpm typecheck`        | `tsc --noEmit`                                                                                                 |
+| `pnpm lint`             | ESLint                                                                                                         |
+| `pnpm format`           | Prettier (write); `pnpm format:check` to verify                                                                |
+| `pnpm test`             | Vitest unit project (`tests/unit`, `packages/*/src`)                                                           |
+| `pnpm test:integration` | Vitest integration project inside `firebase emulators:exec` (needs Java)                                       |
+| `pnpm test:e2e`         | Playwright browser tests                                                                                       |
+| `pnpm emulators`        | Start the Auth and Firestore emulators for project `demo-firetrace`                                            |
+| `pnpm seed:emulator`    | Seed owner, project, key, and sample traces (requires `FIRETRACE_USE_EMULATORS=true`)                          |
+| `pnpm trace:example`    | Send a nested example trace with the SDK (`FIRETRACE_ENDPOINT`, `FIRETRACE_API_KEY`)                           |
+| `pnpm firebase:deploy`  | Deploy Firestore rules and indexes and the Auth provider config from `firebase.json`                           |
+| `pnpm sdk:build`        | Compile `packages/sdk-js` to `dist/`; `pnpm sdk:typecheck` to check only                                       |
+| `pnpm mcp:stdio`        | Run the stdio MCP bridge from source (`FIRETRACE_ENDPOINT`, `FIRETRACE_API_KEY`); `pnpm mcp:build` compiles it |
 
 ## Current limitations
 

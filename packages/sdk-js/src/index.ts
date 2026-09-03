@@ -15,6 +15,8 @@ import type {
 } from "./types.js";
 
 export type * from "./types.js";
+import { FireTraceError } from "./errors.js";
+import { FireTraceApi } from "./api.js";
 
 // ---------------------------------------------------------------------------
 // Options and errors
@@ -45,29 +47,8 @@ export interface FireTraceOptions {
   clock?: { now(): number; wall(): Date };
 }
 
-export class FireTraceError extends Error {
-  readonly status: number | null;
-  readonly code: string;
-  readonly requestId: string | null;
-  readonly retryable: boolean;
-  constructor(
-    message: string,
-    opts: {
-      status?: number | null;
-      code?: string;
-      requestId?: string | null;
-      retryable?: boolean;
-      cause?: unknown;
-    } = {},
-  ) {
-    super(message, { cause: opts.cause });
-    this.name = "FireTraceError";
-    this.status = opts.status ?? null;
-    this.code = opts.code ?? "unknown";
-    this.requestId = opts.requestId ?? null;
-    this.retryable = opts.retryable ?? false;
-  }
-}
+export { FireTraceError } from "./errors.js";
+export * from "./api.js";
 
 export type SendResult =
   { ok: true; response: IngestResponse } | { ok: false; error: FireTraceError };
@@ -330,6 +311,19 @@ export class FireTrace {
     } finally {
       this.inFlight.delete(promise);
     }
+  }
+
+  /**
+   * Read/delete client for the same deployment and key (scopes traces:read /
+   * traces:delete). See docs/api.md.
+   */
+  api(): FireTraceApi {
+    return new FireTraceApi({
+      endpoint: this.url.replace(/\/api\/v1\/traces$/, ""),
+      apiKey: this.apiKey,
+      fetch: this.fetchImpl,
+      timeoutMs: this.timeoutMs,
+    });
   }
 
   /** Resolve once every in-flight send has settled. */

@@ -1,39 +1,8 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
-import { parseApiKey, verifyApiKey } from "./api-keys";
 import { ApiError, isQuotaExhausted } from "./errors";
 import type { NormalizedIngest, NormalizedSpan, NormalizedTrace } from "./normalize";
 
-export interface AuthenticatedKey {
-  keyId: string;
-  projectId: string;
-}
-
-/**
- * Resolve a bearer key to its project. Every failure is the same 401 so the
- * response never reveals whether a key id exists.
- */
-export async function authenticateApiKey(
-  db: Firestore,
-  authorizationHeader: string | null,
-  pepper: string,
-): Promise<AuthenticatedKey> {
-  const invalid = () =>
-    new ApiError(401, "invalid_api_key", "The project API key is missing, invalid, or revoked.");
-  if (!authorizationHeader) throw invalid();
-  const [scheme, ...rest] = authorizationHeader.trim().split(/\s+/);
-  const presented = rest.join("");
-  if (!/^bearer$/i.test(scheme) || !presented) throw invalid();
-  const parsed = parseApiKey(presented);
-  if (!parsed) throw invalid();
-
-  const snap = await db.collection("apiKeys").doc(parsed.keyId).get();
-  if (!snap.exists) throw invalid();
-  const data = snap.data() ?? {};
-  if (data.revokedAt) throw invalid();
-  if (typeof data.keyHash !== "string" || typeof data.projectId !== "string") throw invalid();
-  if (!verifyApiKey(presented, pepper, data.keyHash)) throw invalid();
-  return { keyId: parsed.keyId, projectId: data.projectId };
-}
+export { authenticateApiKey, type AuthenticatedKey } from "./api-auth";
 
 function toTimestamp(iso: string): Timestamp {
   return Timestamp.fromDate(new Date(iso));

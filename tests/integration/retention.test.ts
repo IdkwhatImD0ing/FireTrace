@@ -93,7 +93,22 @@ describe("retention: no TTL field, policy or cleanup path exists", () => {
     expect(rules).not.toMatch(RETENTION_MARKER);
   });
 
-  it("no server module, script or SDK source references an expiry field or TTL", () => {
+  it("no trace-data module, script or SDK source references an expiry field or TTL", () => {
+    // API keys may carry a credential lifetime (docs/security.md); trace, span
+    // and project data never expire. Only the modules that own key lifetime
+    // may mention expiry, and they never touch trace documents.
+    const KEY_LIFETIME_MODULES = new Set(
+      [
+        "src/lib/actions.ts",
+        "src/lib/firetrace/api-auth.ts",
+        "src/lib/firetrace/convert.ts",
+        "src/lib/firetrace/projects.ts",
+        "src/lib/firetrace/scopes.ts",
+        "src/lib/firetrace/types.ts",
+        "src/app/api/v1/key/route.ts",
+        "packages/sdk-js/src/api.ts",
+      ].map((rel) => join(repoRoot, ...rel.split("/"))),
+    );
     const files = [
       ...walk(join(repoRoot, "src", "lib")),
       ...walk(join(repoRoot, "src", "app", "api")),
@@ -101,7 +116,15 @@ describe("retention: no TTL field, policy or cleanup path exists", () => {
       ...walk(join(repoRoot, "packages", "sdk-js", "src")),
     ];
     expect(files.length).toBeGreaterThan(10);
-    const offenders = files.filter((f) => RETENTION_MARKER.test(readFileSync(f, "utf8")));
+    const offenders = files.filter(
+      (f) => !KEY_LIFETIME_MODULES.has(f) && RETENTION_MARKER.test(readFileSync(f, "utf8")),
+    );
     expect(offenders).toEqual([]);
+
+    // The write path for trace data is scanned above and must stay clean.
+    for (const rel of ["schema.ts", "normalize.ts", "ingest.ts", "queries.ts", "tree.ts"]) {
+      const src = readFileSync(join(repoRoot, "src", "lib", "firetrace", rel), "utf8");
+      expect(src, rel).not.toMatch(RETENTION_MARKER);
+    }
   });
 });

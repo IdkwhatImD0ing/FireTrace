@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue, SpanKind, TraceStatus, Usage } from "./schema";
+import type { KeyScope } from "./scopes";
 
 /** Dashboard-facing models (Timestamps converted to ISO strings for serialization). */
 
@@ -25,6 +26,9 @@ export interface ApiKeySummary {
   createdAt: string;
   createdByUid: string;
   revokedAt: string | null;
+  scopes: KeyScope[];
+  expiresAt: string | null;
+  lastUsedAt: string | null;
 }
 
 export interface TraceSummary {

@@ -56,3 +56,6 @@ ui-debug.log
 /coverage/
 
 .vercel
+
+# workspace package build output
+packages/*/dist/

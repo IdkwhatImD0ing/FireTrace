@@ -11,6 +11,7 @@ export type ApiErrorCode =
   | "invalid_api_key"
   | "unauthorized"
   | "forbidden"
+  | "insufficient_scope"
   | "not_found"
   | "trace_id_conflict"
   | "conflict"

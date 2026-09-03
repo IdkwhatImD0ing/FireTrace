@@ -54,7 +54,10 @@ A FireTrace deployment is a Next.js application (typically on Vercel) plus one F
 - Storage: `HMAC-SHA-256(FIRETRACE_KEY_PEPPER, plaintext)` only, with the last four characters kept for display. Verification uses `crypto.timingSafeEqual`.
 - The plaintext is returned exactly once from `createApiKey` / `rotateApiKey` (`src/lib/firetrace/projects.ts`) and rendered once in the settings panel; it is not persisted anywhere and cannot be retrieved after navigation.
 - Revocation sets `revokedAt`; `authenticateApiKey` rejects revoked keys on the next request. Rotation revokes the old key and creates the new one in a single transaction.
-- All authentication failures return an identical `401 invalid_api_key` so responses do not reveal whether a key id exists.
+- All authentication failures (missing, malformed, unknown, revoked, expired) return an identical `401 invalid_api_key` with a `WWW-Authenticate: Bearer` challenge, so responses do not reveal whether a key id exists.
+- **Scopes** (`src/lib/firetrace/scopes.ts`): each key stores `scopes` chosen at creation from `traces:write`, `traces:read`, `traces:delete`. `withApiKey(scope, …)` (`api-handler.ts`) calls `requireScope` before the handler runs and answers `403 insufficient_scope`. Keys created before scopes existed are treated as `traces:write` only. Rotation copies scopes and expiry.
+- **Expiry**: optional `expiresAt` (30 d / 90 d / 1 y presets); `keyIsUsable` rejects a key at or past the instant. `lastUsedAt` is refreshed at most every five minutes and never carries request content.
+- **MCP** (`src/app/api/mcp/route.ts`): the same bearer authentication runs before any JSON-RPC message is parsed; the server is built per request (stateless, no session ids, `GET`/`DELETE` are 405) and only registers tools the key's scopes allow. Deletion additionally requires `confirm: true`.
 
 ### Logging
 
