@@ -3,7 +3,8 @@
     "authorizedDomains": [
       "localhost",
       "firetrace-d74df.firebaseapp.com",
-      "firetrace-d74df.web.app"
+      "firetrace-d74df.web.app",
+      "fire-trace.vercel.app"
     ],
     "providers": {
       "emailPassword": true,
@@ -18,9 +19,18 @@
     "indexes": "firestore.indexes.json"
   },
   "emulators": {
-    "auth": { "host": "127.0.0.1", "port": 9099 },
-    "firestore": { "host": "127.0.0.1", "port": 8080 },
-    "ui": { "enabled": true, "port": 4000 },
+    "auth": {
+      "host": "127.0.0.1",
+      "port": 9099
+    },
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    },
     "singleProjectMode": true
   }
 }
