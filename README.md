@@ -160,7 +160,9 @@ Environment variables (see `.env.example` for comments):
 
 Do not set `FIRETRACE_USE_EMULATORS` or `NEXT_PUBLIC_FIRETRACE_USE_EMULATORS` to `true` on a hosted deployment; production refuses to start with the emulator flag enabled.
 
-A **Deploy with Vercel** button will be added to this README once the public GitHub repository URL exists. The button cannot configure Firebase for you: complete [docs/firebase-setup.md](docs/firebase-setup.md) first, then supply the variables in the table above when Vercel prompts for them.
+[![Deploy with Vercel](https://vercel.com/button)](<https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIdkwhatImD0ing%2FFireTrace&env=NEXT_PUBLIC_FIREBASE_API_KEY,NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,NEXT_PUBLIC_FIREBASE_PROJECT_ID,NEXT_PUBLIC_FIREBASE_APP_ID,FIREBASE_SERVICE_ACCOUNT_BASE64,DASHBOARD_ALLOWED_EMAILS,FIRETRACE_KEY_PEPPER,NEXT_PUBLIC_APP_URL&envDescription=Firebase%20Web%20app%20config%2C%20Admin%20service%20account%20(base64)%2C%20allowlisted%20emails%2C%20key%20pepper%2C%20public%20URL&envLink=https%3A%2F%2Fgithub.com%2FIdkwhatImD0ing%2FFireTrace%2Fblob%2Fmain%2Fdocs%2Fvercel-deployment.md&project-name=firetrace&repository-name=firetrace>)
+
+The button clones the repository into your Vercel account and prompts for the variables in the table above. It cannot configure Firebase for you: complete [docs/firebase-setup.md](docs/firebase-setup.md) first, then paste the values when Vercel asks.
 
 ## Send traces
 

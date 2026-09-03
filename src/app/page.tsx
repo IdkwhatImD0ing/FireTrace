@@ -5,7 +5,8 @@ import { normalizeIngestBody } from "@/lib/firetrace/normalize";
 import { sampleTraceRequest } from "@/lib/firetrace/sample";
 import type { SpanDetail, TraceDetail } from "@/lib/firetrace/types";
 
-const REPO_URL = process.env.NEXT_PUBLIC_REPOSITORY_URL ?? "https://github.com/your-org/fire-trace";
+const REPO_URL =
+  process.env.NEXT_PUBLIC_REPOSITORY_URL ?? "https://github.com/IdkwhatImD0ing/FireTrace";
 
 function previewData(): { trace: TraceDetail; spans: SpanDetail[] } {
   const normalized = normalizeIngestBody(sampleTraceRequest());
