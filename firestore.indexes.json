@@ -1,0 +1,53 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "traces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "startedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "traces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "model", "order": "ASCENDING" },
+        { "fieldPath": "startedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "traces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sessionId", "order": "ASCENDING" },
+        { "fieldPath": "startedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "traces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "startedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "apiKeys",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    { "collectionGroup": "traces", "fieldPath": "input", "indexes": [] },
+    { "collectionGroup": "traces", "fieldPath": "output", "indexes": [] },
+    { "collectionGroup": "traces", "fieldPath": "metadata", "indexes": [] },
+    { "collectionGroup": "spans", "fieldPath": "input", "indexes": [] },
+    { "collectionGroup": "spans", "fieldPath": "output", "indexes": [] },
+    { "collectionGroup": "spans", "fieldPath": "attributes", "indexes": [] },
+    { "collectionGroup": "spans", "fieldPath": "events", "indexes": [] }
+  ]
+}

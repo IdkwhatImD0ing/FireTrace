@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------------
+ * FireTrace visual system: dark-first, neutral warm surfaces, restrained
+ * ember accents, monospace reserved for identifiers and code. Span-kind
+ * colors are a validated categorical palette (src/lib/firetrace/kinds.ts).
+ * ---------------------------------------------------------------------- */
+@theme inline {
+  --color-bg: #0e0d0b;
+  --color-bg-2: #131210;
+  --color-surface: #181613;
+  --color-surface-2: #1f1c18;
+  --color-surface-3: #27231e;
+  --color-line: rgba(255, 244, 230, 0.08);
+  --color-line-2: rgba(255, 244, 230, 0.16);
+  --color-ink: #efe9df;
+  --color-ink-2: #b7ada0;
+  --color-ink-3: #7d7468;
+  --color-ember: #f0813a;
+  --color-ember-2: #ffb27a;
+  --color-ember-dim: rgba(240, 129, 58, 0.14);
+  --color-good: #2fb344;
+  --color-warn: #f2b02c;
+  --color-crit: #d03b3b;
+  --color-crit-2: #ee6b6b;
+  --color-k-agent: #3987e5;
+  --color-k-llm: #d95926;
+  --color-k-tool: #199e70;
+  --color-k-retriever: #c98500;
+  --color-k-chain: #d55181;
+  --color-k-embedding: #008300;
+  --color-k-reranker: #9085e9;
+  --color-k-custom: #8a857c;
+
+  --font-display: var(--font-instrument-serif), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-plex-sans), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --shadow-panel: 0 1px 0 rgba(255, 244, 230, 0.03) inset, 0 12px 32px -20px rgba(0, 0, 0, 0.8);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--color-ember);
+    color: #1a0d04;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-ember);
+    outline-offset: 2px;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+  dialog::backdrop {
+    background: rgba(8, 6, 4, 0.7);
+  }
+}
+
+@utility mono-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium whitespace-nowrap transition-[background-color,color,border-color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-ember text-[#1a0d04] hover:bg-ember-2;
+  }
+  .btn-ghost {
+    @apply border border-line-2 text-ink hover:border-ink-3 hover:bg-surface-2;
+  }
+  .btn-danger {
+    @apply border border-crit/50 text-crit-2 hover:bg-crit/15;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+  .input {
+    @apply w-full rounded-md border border-line-2 bg-bg-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:border-ember focus:ring-2 focus:ring-ember/30 focus:outline-none;
+  }
+  .card {
+    @apply rounded-lg border border-line bg-surface;
+    box-shadow: var(--shadow-panel);
+  }
+  .pre {
+    @apply rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-ink-2;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line-2 px-2 py-0.5 font-mono text-[11px] text-ink-2;
+  }
+  .table-dense th {
+    @apply mono-label px-3 py-2 text-left font-normal;
+  }
+  .table-dense td {
+    @apply px-3 py-2 align-middle text-sm;
+  }
+  .table-dense tbody tr {
+    @apply border-t border-line/70 transition-colors hover:bg-surface-2/70;
+  }
+  .json-key {
+    color: var(--color-ember-2);
+  }
+  .json-string {
+    color: #a7d3a0;
+  }
+  .json-number {
+    color: #8fc3ff;
+  }
+  .json-literal {
+    color: #d2a8ff;
+  }
+}
+
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.bar-grow {
+  transform-origin: left center;
+  animation: grow-x 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bar-grow {
+    animation: none !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

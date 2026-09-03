@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Fake, public-shaped values so `next build` and the emulator-backed tests run
+# without any real Firebase project or secret. Nothing here grants access to
+# anything.
+env:
+  NEXT_PUBLIC_FIREBASE_API_KEY: fake-api-key
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: localhost
+  NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-firetrace
+  NEXT_PUBLIC_FIREBASE_APP_ID: "1:1:web:1"
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+jobs:
+  checks:
+    name: Format, lint, types, unit, integration, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (version from package.json "packageManager")
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java 21 for the Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache Firebase emulator binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('firebase.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - name: Generate Next.js route types
+        run: pnpm typegen
+      - run: pnpm typecheck
+      - run: pnpm sdk:typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Emulator-backed integration tests
+        run: pnpm test:integration
+      - name: Production build
+        run: pnpm build
+
+  e2e:
+    name: Browser tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (version from package.json "packageManager")
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java 21 for the Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache Firebase emulator binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('firebase.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser tests against the emulators
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+          if-no-files-found: ignore

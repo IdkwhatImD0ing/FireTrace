@@ -1,0 +1,26 @@
+{
+  "$comment": "Anti-fabrication hooks (Layer 3 from CLAUDE-CODE-GUIDELINES.md). PostToolUse type-checks after every file write so a fabricated import fails immediately; Stop type-checks again so 'it compiles' can't be claimed without running tsc. Errors go to stderr with exit 2 so Claude sees them. Run `npx next typegen` once after cloning so the generated route types exist.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsc --noEmit --pretty false 1>&2 || exit 2"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsc --noEmit --pretty false 1>&2 || exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}
