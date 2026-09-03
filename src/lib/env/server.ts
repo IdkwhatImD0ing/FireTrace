@@ -51,6 +51,44 @@ export function parseAllowedEmails(value: string): string[] {
     .filter((e) => e.length > 0);
 }
 
+/**
+ * Accepts the service account as base64 of the JSON key file (documented form)
+ * or as the raw JSON text, since both get pasted into hosting dashboards.
+ * Whitespace and line breaks inside base64 are ignored.
+ */
+export function decodeServiceAccount(
+  value: string,
+): { ok: true; json: Record<string, unknown> } | { ok: false; problem: string } {
+  const trimmed = value.trim();
+  let text: string;
+  if (trimmed.startsWith("{")) {
+    text = trimmed;
+  } else {
+    try {
+      text = Buffer.from(trimmed.replace(/\s+/g, ""), "base64").toString("utf8");
+    } catch {
+      return { ok: false, problem: "FIREBASE_SERVICE_ACCOUNT_BASE64 is not valid base64" };
+    }
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return { ok: false, problem: "FIREBASE_SERVICE_ACCOUNT_BASE64 is not valid base64 JSON" };
+  }
+  if (
+    typeof json !== "object" ||
+    json === null ||
+    (json as { type?: unknown }).type !== "service_account"
+  ) {
+    return {
+      ok: false,
+      problem: "FIREBASE_SERVICE_ACCOUNT_BASE64 does not decode to a service-account JSON",
+    };
+  }
+  return { ok: true, json: json as Record<string, unknown> };
+}
+
 /** Pure: turn raw env into a typed config or a list of problems. Exported for tests. */
 export function buildServerEnv(
   raw: Record<string, string | undefined>,
@@ -85,16 +123,8 @@ export function buildServerEnv(
     problems.push("FIREBASE_SERVICE_ACCOUNT_BASE64 is required in production");
   }
   if (v.FIREBASE_SERVICE_ACCOUNT_BASE64) {
-    try {
-      const json = JSON.parse(
-        Buffer.from(v.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8"),
-      );
-      if (typeof json !== "object" || json === null || json.type !== "service_account") {
-        problems.push("FIREBASE_SERVICE_ACCOUNT_BASE64 does not decode to a service-account JSON");
-      }
-    } catch {
-      problems.push("FIREBASE_SERVICE_ACCOUNT_BASE64 is not valid base64 JSON");
-    }
+    const decoded = decodeServiceAccount(v.FIREBASE_SERVICE_ACCOUNT_BASE64);
+    if (!decoded.ok) problems.push(decoded.problem);
   }
   let appUrl = v.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "");
   try {

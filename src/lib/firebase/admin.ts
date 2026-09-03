@@ -9,7 +9,7 @@ import {
 } from "firebase-admin/app";
 import { getAuth, type Auth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
-import { serverEnv } from "@/lib/env/server";
+import { decodeServiceAccount, serverEnv } from "@/lib/env/server";
 
 /**
  * Firebase Admin SDK, initialized exactly once per process (survives Next.js
@@ -42,10 +42,12 @@ export function adminApp(): App {
     // FIRETRACE_USE_EMULATORS may opt in, so stray host variables are ignored.
     delete process.env.FIRESTORE_EMULATOR_HOST;
     delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
-    const json = JSON.parse(
-      Buffer.from(env.serviceAccountBase64, "base64").toString("utf8"),
-    ) as ServiceAccount;
-    app = initializeApp({ credential: cert(json), projectId: env.projectId });
+    const decoded = decodeServiceAccount(env.serviceAccountBase64);
+    if (!decoded.ok) throw new Error(decoded.problem);
+    app = initializeApp({
+      credential: cert(decoded.json as ServiceAccount),
+      projectId: env.projectId,
+    });
   } else {
     delete process.env.FIRESTORE_EMULATOR_HOST;
     delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
