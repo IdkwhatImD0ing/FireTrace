@@ -96,6 +96,12 @@ class FakeBackend implements TraceBackend {
     if (trace.id === "bad") throw new BackendError(400, "invalid_trace", "spans required");
     return { ok: true, traceId: trace.id, spanCount: 3, duplicate: false };
   }
+  async patchTraceMetadata(traceId: string, metadata: Record<string, unknown>) {
+    this.calls.push(["patchTraceMetadata", { traceId, metadata }]);
+    if (traceId !== TRACE_ID) throw new BackendError(404, "not_found", "Trace not found.");
+    if ("same" in metadata) return { traceId, metadata: { same: true }, changed: false };
+    return { traceId, metadata: { route: "/api/chat", ...metadata }, changed: true };
+  }
   async deleteTrace(traceId: string) {
     this.calls.push(["deleteTrace", traceId]);
     if (traceId !== TRACE_ID) throw new BackendError(404, "not_found", "Trace not found.");
@@ -132,6 +138,7 @@ describe("createFireTraceMcpServer", () => {
       "get_project",
       "get_trace",
       "list_traces",
+      "patch_trace_metadata",
       "record_trace",
     ]);
     await all.client.close();
@@ -251,6 +258,42 @@ describe("createFireTraceMcpServer", () => {
     expect(textOf(bad)).toContain("invalid_trace (HTTP 400): spans required");
     const schema = await client.callTool({ name: "get_ingest_schema", arguments: {} });
     expect(textOf(schema)).toContain('"schemaVersion"');
+    await client.close();
+  });
+
+  it("patch_trace_metadata merges keys and reports when nothing changed", async () => {
+    const backend = new FakeBackend(["traces:write"]);
+    const { client } = await connect(backend);
+    const merged = await client.callTool({
+      name: "patch_trace_metadata",
+      arguments: { traceId: TRACE_ID, metadata: { feedback: 1 } },
+    });
+    expect(backend.calls[0]).toEqual([
+      "patchTraceMetadata",
+      { traceId: TRACE_ID, metadata: { feedback: 1 } },
+    ]);
+    expect(textOf(merged)).toContain("Merged into the metadata of trace");
+    expect(textOf(merged)).toContain("2 keys");
+
+    const unchanged = await client.callTool({
+      name: "patch_trace_metadata",
+      arguments: { traceId: TRACE_ID, metadata: { same: true } },
+    });
+    expect(textOf(unchanged)).toContain("Already matched");
+
+    const missing = await client.callTool({
+      name: "patch_trace_metadata",
+      arguments: { traceId: "f".repeat(32), metadata: { feedback: 1 } },
+    });
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing)).toContain("not_found (HTTP 404)");
+    await client.close();
+  });
+
+  it("a read-only key is not offered the metadata patch", async () => {
+    const { client } = await connect(new FakeBackend(["traces:read"]));
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).not.toContain("patch_trace_metadata");
     await client.close();
   });
 

@@ -196,9 +196,9 @@ Responses: `201` stored, `200` identical duplicate, `400` invalid, `401` bad key
 
 MIT, see [LICENSE](../../LICENSE).
 
-## Reading and deleting traces
+## Reading, annotating, and deleting traces
 
-`FireTraceApi` wraps the key-authenticated read side of the API ([docs/api.md](../../docs/api.md)). It needs a key with the `traces:read` scope (and `traces:delete` for `deleteTrace`); the recording client's default keys have `traces:write` + `traces:read`.
+`FireTraceApi` wraps the key-authenticated side of the API beyond ingestion ([docs/api.md](../../docs/api.md)). It needs a key with the `traces:read` scope (`traces:write` for `patchMetadata`, `traces:delete` for `deleteTrace`); the recording client's default keys have `traces:write` + `traces:read`.
 
 ```ts
 import { FireTrace, FireTraceApi } from "@firetrace/sdk";
@@ -213,8 +213,19 @@ const key = await api.getKey(); // { keyId, projectId, scopes, expiresAt, lastUs
 const page = await api.listTraces({ status: "error", limit: 20 }); // { traces, nextCursor, prevCursor, pageSize }
 for await (const trace of api.iterateTraces({ model: "example-model" })) console.log(trace.id);
 const detail = await api.getTrace(page.traces[0].id); // { trace, spans } or null
+await api.patchMetadata(page.traces[0].id, { feedback: 1 }); // requires traces:write
 await api.deleteTrace(page.traces[0].id); // requires traces:delete
 const project = await api.getProject(); // counters, storage estimate, key scopes
 ```
 
-Unlike `trace.end()`, these methods throw `FireTraceError` (with `status`, `code`, `requestId`) on any non-2xx response; `getTrace` turns a 404 into `null`. There are no automatic retries on the read side.
+Unlike `trace.end()`, these methods throw `FireTraceError` (with `status`, `code`, `requestId`) on any non-2xx response; `getTrace` turns a 404 into `null`. There are no automatic retries on this side.
+
+`patchMetadata` shallow-merges keys into a stored trace's `metadata` — the one part of a trace that can change after it is recorded, for ratings and evaluations that only exist afterwards. A patched key replaces that top-level key outright, concurrent writers on one key are last-writer-wins, and metadata is not indexed so it cannot be filtered or aggregated server-side. It returns `{ traceId, metadata, changed }`, where `metadata` is the full merged object and `changed` is `false` when the merge matched what was already stored.
+
+```ts
+// Wire a thumbs rating in a chat widget straight to the trace it belongs to.
+await api.patchMetadata(traceId, {
+  feedback: rating === "up" ? 1 : 0,
+  feedbackLabel: rating === "up" ? "thumbs-up" : "thumbs-down",
+});
+```

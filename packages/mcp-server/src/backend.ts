@@ -95,6 +95,14 @@ export interface RecordResult {
   duplicate: boolean;
 }
 
+export interface MetadataPatchResult {
+  traceId: string;
+  /** The full merged metadata. */
+  metadata: Record<string, unknown>;
+  /** False when the merge matched what was stored; nothing was written. */
+  changed: boolean;
+}
+
 export interface TraceBackend {
   /** Scopes carried by the authenticated key; decides which tools are registered. */
   readonly scopes: readonly string[];
@@ -105,6 +113,14 @@ export interface TraceBackend {
   getTrace(traceId: string): Promise<TraceDetailLike | null>;
   /** Body in the ingestion format `{ schemaVersion: 1, trace }`. */
   recordTrace(body: unknown): Promise<RecordResult>;
+  /**
+   * Shallow-merge keys into a stored trace's metadata, the one mutable part of
+   * a trace. Throws a BackendError with status 404 when it does not exist.
+   */
+  patchTraceMetadata(
+    traceId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<MetadataPatchResult>;
   /** Throws a BackendError with status 404 when the trace does not exist. */
   deleteTrace(traceId: string): Promise<void>;
   /** JSON Schema for the ingestion request body. */

@@ -97,7 +97,7 @@ export async function ingestTrace(
         throw new ApiError(
           409,
           "trace_id_conflict",
-          `Trace ${normalized.trace.id} already exists with different content. Traces are immutable; use a new trace id.`,
+          `Trace ${normalized.trace.id} already exists with different content. Traces are immutable; use a new trace id, or PATCH this one to merge into its metadata.`,
         );
       }
       if (usageRef) {

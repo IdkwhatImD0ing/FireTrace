@@ -3,7 +3,11 @@ import { NextRequest } from "next/server";
 import { POST as mcpPost } from "@/app/api/mcp/route";
 import { GET as keyGet } from "@/app/api/v1/key/route";
 import { GET as projectGet } from "@/app/api/v1/project/route";
-import { DELETE as traceDelete, GET as traceGet } from "@/app/api/v1/traces/[traceId]/route";
+import {
+  DELETE as traceDelete,
+  GET as traceGet,
+  PATCH as tracePatch,
+} from "@/app/api/v1/traces/[traceId]/route";
 import { GET as tracesGet, POST as tracesPost } from "@/app/api/v1/traces/route";
 
 export const BASE_URL = "http://localhost:3000";
@@ -44,6 +48,8 @@ export async function callApi<T = Record<string, unknown>>(call: ApiCall): Promi
     response = await tracesGet(request);
   else if (traceMatch && method === "GET")
     response = await traceGet(request, { params: Promise.resolve({ traceId: traceMatch[1] }) });
+  else if (traceMatch && method === "PATCH")
+    response = await tracePatch(request, { params: Promise.resolve({ traceId: traceMatch[1] }) });
   else if (traceMatch && method === "DELETE")
     response = await traceDelete(request, { params: Promise.resolve({ traceId: traceMatch[1] }) });
   else if (url.pathname === "/api/v1/project") response = await projectGet(request);

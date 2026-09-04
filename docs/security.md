@@ -19,7 +19,7 @@ A FireTrace deployment is a Next.js application (typically on Vercel) plus one F
 ## Actors and trust boundaries
 
 - **Anonymous internet clients** can reach `/`, `/login`, `/api/health` (booleans only), `/api/auth/session`, and `POST /api/v1/traces`. They cannot read any data.
-- **Holder of a valid API key** can create immutable traces in exactly one project. Keys cannot read, list, modify, or delete anything, and cannot touch other projects (`src/lib/firetrace/ingest.ts` resolves the project from the key document, never from the request).
+- **Holder of a valid API key** can do what the key's scopes allow, in exactly one project and never another: record traces and merge into their `metadata` (`traces:write`), read and list them (`traces:read`), delete them (`traces:delete`). The project comes from the key document, never from the request (`src/lib/firetrace/ingest.ts`, `metadata.ts`, `api-auth.ts`).
 - **Allowlisted owners** (every address in `DASHBOARD_ALLOWED_EMAILS`) have full access to every project, key, and trace. FireTrace has no roles or per-project permissions; treat the allowlist as a list of co-administrators.
 - **The Firebase project and Vercel account** are trusted. Anyone with console or IAM access to either can read or delete everything; protect those accounts with strong authentication.
 - **The browser** is untrusted with respect to data access. The Firebase Web SDK is used only to obtain an ID token; `firestore.rules` denies all direct reads and writes, so a compromised or modified client can do nothing that the server does not independently authorize.
@@ -90,7 +90,9 @@ A FireTrace deployment is a Next.js application (typically on Vercel) plus one F
 
 ### Idempotency and immutability
 
-Traces are immutable. A retry with identical content is a no-op, and a different body under an existing trace id is rejected with `409` inside the same transaction that would otherwise write it (`ingestTrace`). Counters are updated in that transaction, so a partial write cannot leave the project statistics inconsistent.
+Traces are immutable apart from `metadata`. A retry with identical content is a no-op, and a different body under an existing trace id is rejected with `409` inside the same transaction that would otherwise write it (`ingestTrace`). Counters are updated in that transaction, so a partial write cannot leave the project statistics inconsistent.
+
+`PATCH /api/v1/traces/{traceId}` (`src/lib/firetrace/metadata.ts`) is the single exception, and a narrow one: a strict body admits `metadata` and nothing else, the merge runs in a transaction that first confirms the trace exists under the key's own project, and the write touches `metadata`, `metadataUpdatedAt`, and `estimatedBytes` only — never a span, an identifier, a timing, or `bodyHash`. It is last-writer-wins with no history, so metadata is not a place for anything that needs an audit trail.
 
 ## Checklist
 

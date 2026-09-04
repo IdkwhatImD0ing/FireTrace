@@ -68,9 +68,14 @@ describe("POST /api/mcp (stateless Streamable HTTP) against the emulator", () =>
       "get_project",
       "get_trace",
       "list_traces",
+      "patch_trace_metadata",
       "record_trace",
     ]);
-    expect(await mcpToolNames(writeOnly.plaintext)).toEqual(["get_ingest_schema", "record_trace"]);
+    expect(await mcpToolNames(writeOnly.plaintext)).toEqual([
+      "get_ingest_schema",
+      "patch_trace_metadata",
+      "record_trace",
+    ]);
     expect(await mcpToolNames(readOnly.plaintext)).toEqual([
       "find_spans",
       "get_project",
@@ -84,6 +89,43 @@ describe("POST /api/mcp (stateless Streamable HTTP) against the emulator", () =>
     });
     expect(forbidden.rpc.error ?? forbidden.result?.isError).toBeTruthy();
     expect(await traceData(project.id, sampleTraceRequest().trace.id)).toBeNull();
+  });
+
+  it("patches trace metadata through the tool without disturbing the trace", async () => {
+    const project = await createTestProject("patchable");
+    const key = await keyWith(project.id, ["traces:write", "traces:read"]);
+    const body = sampleTraceRequest();
+    await mcpTool(key.plaintext, "record_trace", { trace: body.trace });
+    const before = await traceData(project.id, body.trace.id);
+
+    const patched = await mcpTool(key.plaintext, "patch_trace_metadata", {
+      traceId: body.trace.id,
+      metadata: { feedback: 1, feedbackLabel: "thumbs-up" },
+    });
+    expect(patched.result?.isError).toBeFalsy();
+    expect(patched.text).toContain("Merged into the metadata");
+    expect(patched.result?.structuredContent).toMatchObject({
+      traceId: body.trace.id,
+      changed: true,
+    });
+
+    const after = await traceData(project.id, body.trace.id);
+    expect(after!.metadata).toMatchObject({ feedback: 1, feedbackLabel: "thumbs-up" });
+    expect(after!.bodyHash).toBe(before!.bodyHash);
+    expect(after!.name).toBe(before!.name);
+
+    const repeat = await mcpTool(key.plaintext, "patch_trace_metadata", {
+      traceId: body.trace.id,
+      metadata: { feedback: 1, feedbackLabel: "thumbs-up" },
+    });
+    expect(repeat.text).toContain("Already matched");
+
+    const missing = await mcpTool(key.plaintext, "patch_trace_metadata", {
+      traceId: "f".repeat(32),
+      metadata: { feedback: 1 },
+    });
+    expect(missing.result?.isError).toBe(true);
+    expect(missing.text).toContain("not_found");
   });
 
   it("records, lists, inspects, searches, and deletes traces through tools", async () => {

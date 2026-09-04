@@ -57,10 +57,13 @@ export interface TraceSummary {
 
 export interface TraceDetail extends TraceSummary {
   schemaVersion: 1;
+  /** Hash of the body as ingested; PATCHing metadata deliberately leaves it alone. */
   bodyHash: string;
   input: JsonValue | null;
   output: JsonValue | null;
   metadata: JsonObject;
+  /** Set the first time metadata was patched after ingestion; null if never. */
+  metadataUpdatedAt: string | null;
 }
 
 export interface SpanEvent {

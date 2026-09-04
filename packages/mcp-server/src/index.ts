@@ -3,6 +3,7 @@ export {
   hasScope,
   type KeyScope,
   type ListTracesQuery,
+  type MetadataPatchResult,
   type ProjectLike,
   type RecordResult,
   type SpanLike,

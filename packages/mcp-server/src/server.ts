@@ -106,8 +106,8 @@ export function createFireTraceMcpServer(
       instructions: [
         "FireTrace stores completed LLM/agent traces (a trace is a tree of spans).",
         `This key belongs to project ${backend.projectId} with scopes: ${backend.scopes.join(", ") || "none"}.`,
-        "Use list_traces to find traces, get_trace for the full span tree, find_spans to locate specific spans, and record_trace to store a new trace (call get_ingest_schema first if unsure of the shape).",
-        "Traces are immutable; deletion is explicit and permanent.",
+        "Use list_traces to find traces, get_trace for the full span tree, find_spans to locate specific spans, and record_trace to store a new trace (call get_ingest_schema first if unsure of the shape). patch_trace_metadata merges judgements made after the run into a trace's metadata.",
+        "A stored trace is immutable apart from its metadata; deletion is explicit and permanent.",
       ].join(" "),
     },
   );
@@ -385,6 +385,34 @@ export function createFireTraceMcpServer(
           return text(`${verb}: trace ${result.traceId} with ${result.spanCount} spans.`, {
             ...result,
           });
+        } catch (err) {
+          return failure(err);
+        }
+      },
+    );
+
+    server.registerTool(
+      "patch_trace_metadata",
+      {
+        title: "Patch trace metadata",
+        description:
+          "Shallow-merge keys into a stored trace's metadata: the one part of a trace that can change after it is recorded, for judgements that only exist afterwards (a rating, a review verdict, an eval result). A key in the patch replaces that top-level key outright; keys not mentioned are left alone; concurrent writers on one key are last-writer-wins. Everything else about the trace, spans included, stays immutable. Metadata is not indexed, so it cannot be searched or filtered by.",
+        inputSchema: {
+          traceId: TRACE_ID,
+          metadata: z
+            .record(z.string(), z.unknown())
+            .describe("Keys to merge into the trace's existing metadata"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      },
+      async (input) => {
+        try {
+          const result = await backend.patchTraceMetadata(input.traceId, input.metadata);
+          const verb = result.changed ? "Merged into" : "Already matched";
+          return text(
+            `${verb} the metadata of trace ${input.traceId}; it now has ${Object.keys(result.metadata).length} keys.`,
+            { ...result },
+          );
         } catch (err) {
           return failure(err);
         }

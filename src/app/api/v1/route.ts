@@ -17,6 +17,7 @@ export async function GET(request: Request) {
         recordTrace: "POST /api/v1/traces",
         listTraces: "GET /api/v1/traces",
         getTrace: "GET /api/v1/traces/{traceId}",
+        patchTraceMetadata: "PATCH /api/v1/traces/{traceId}",
         deleteTrace: "DELETE /api/v1/traces/{traceId}",
         getProject: "GET /api/v1/project",
       },

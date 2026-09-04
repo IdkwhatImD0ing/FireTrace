@@ -36,6 +36,7 @@ describe("openApiDocument", () => {
     expect(doc.paths["/api/v1/traces"].post.operationId).toBe("recordTrace");
     expect(doc.paths["/api/v1/traces"].get.operationId).toBe("listTraces");
     expect(doc.paths["/api/v1/traces/{traceId}"].get.operationId).toBe("getTrace");
+    expect(doc.paths["/api/v1/traces/{traceId}"].patch.operationId).toBe("patchTraceMetadata");
     expect(doc.paths["/api/v1/traces/{traceId}"].delete.operationId).toBe("deleteTrace");
     expect(doc.paths["/api/v1/project"].get.operationId).toBe("getProject");
     expect(doc.components.securitySchemes.apiKey).toMatchObject({ type: "http", scheme: "bearer" });
