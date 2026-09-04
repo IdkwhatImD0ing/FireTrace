@@ -149,3 +149,79 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Rendered documentation (src/lib/docs/render.tsx). */
+@layer components {
+  .doc-prose {
+    @apply max-w-3xl text-[15px] leading-relaxed text-ink-2;
+  }
+  .doc-prose h1 {
+    @apply mb-6 font-display text-5xl leading-none text-ink;
+  }
+  .doc-prose h2 {
+    @apply mt-12 mb-4 border-b border-line pb-2 font-display text-3xl leading-tight text-ink;
+  }
+  .doc-prose h3 {
+    @apply mt-8 mb-3 text-lg font-semibold text-ink;
+  }
+  .doc-prose h4 {
+    @apply mt-6 mb-2 text-base font-semibold text-ink;
+  }
+  .doc-prose p {
+    @apply my-4;
+  }
+  .doc-prose a {
+    @apply text-ember-2 underline decoration-ember/40 underline-offset-2 hover:decoration-ember-2;
+  }
+  .doc-prose strong {
+    @apply font-semibold text-ink;
+  }
+  .doc-prose code {
+    @apply rounded border border-line bg-bg-2 px-1 py-0.5 font-mono text-[0.85em] text-ink;
+  }
+  .doc-prose ul,
+  .doc-prose ol {
+    @apply my-4 space-y-1.5 pl-6;
+  }
+  .doc-prose ul {
+    @apply list-disc;
+  }
+  .doc-prose ol {
+    @apply list-decimal;
+  }
+  .doc-prose li > p {
+    @apply my-2;
+  }
+  .doc-prose li > ul,
+  .doc-prose li > ol {
+    @apply my-2;
+  }
+  .doc-code {
+    @apply my-5 overflow-hidden rounded-md border border-line bg-bg-2;
+  }
+  .doc-code-bar {
+    @apply flex items-center justify-between border-b border-line px-3 py-1.5;
+  }
+  .doc-code pre {
+    @apply overflow-x-auto p-3 font-mono text-xs leading-relaxed text-ink-2;
+  }
+  .doc-code pre code {
+    @apply rounded-none border-0 bg-transparent p-0 text-ink-2;
+    font-size: inherit;
+  }
+  .doc-code pre.doc-code-wrap {
+    @apply break-words whitespace-pre-wrap;
+  }
+  .doc-table {
+    @apply my-5 overflow-x-auto rounded-md border border-line;
+  }
+  .doc-table table {
+    @apply w-full border-collapse text-sm;
+  }
+  .doc-table th {
+    @apply mono-label border-b border-line bg-bg-2 px-3 py-2 text-left font-normal;
+  }
+  .doc-table td {
+    @apply border-t border-line/70 px-3 py-2 align-top;
+  }
+}

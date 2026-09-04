@@ -19,6 +19,12 @@ export function Shell({ owner, children }: { owner: Owner; children: ReactNode }
             >
               Projects
             </Link>
+            <Link
+              href="/docs"
+              className="rounded-md px-3 py-1.5 font-mono text-[12px] uppercase tracking-wider text-ink-2 hover:text-ink"
+            >
+              Docs
+            </Link>
           </nav>
           <div className="ml-auto flex items-center gap-3">
             {owner.role === "trial" && (

@@ -5,6 +5,8 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["firebase-admin", "@modelcontextprotocol/sdk"],
   // Workspace packages ship TypeScript sources; Next compiles them in place.
   transpilePackages: ["@firetrace/mcp"],
+  // /docs renders the committed Markdown; make sure the files ship with the functions.
+  outputFileTracingIncludes: { "/docs/[slug]": ["./docs/*.md"] },
 };
 
 export default nextConfig;

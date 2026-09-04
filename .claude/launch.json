@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "production-preview",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "next", "start", "--port", "3002"],
+      "port": 3002
+    }
+  ]
+}

@@ -140,6 +140,8 @@ Prerequisites: Node.js 22 or newer (`.node-version`), pnpm 10 (`corepack enable`
 
 ## Deploy your own
 
+Every deployment also serves these guides at `/docs` (for the author's instance: <https://tracing.art3m1s.me/docs>), rendered from the same Markdown files.
+
 Two guides cover the full path from an empty Firebase project to a working Vercel deployment:
 
 1. [docs/firebase-setup.md](docs/firebase-setup.md): create the Firebase project and Web app, create the Firestore database, enable Google sign-in and authorized domains, deploy `firestore.rules` and `firestore.indexes.json`, generate the Admin service-account credential, and pick the allowlisted email.

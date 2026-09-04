@@ -69,6 +69,9 @@ export default function LandingPage() {
             <Brand />
           </Link>
           <div className="flex items-center gap-2">
+            <Link href="/docs" className="btn btn-ghost btn-sm">
+              Docs
+            </Link>
             <a href={REPO_URL} className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer">
               View GitHub
             </a>

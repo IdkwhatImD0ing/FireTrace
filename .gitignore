@@ -63,3 +63,6 @@ packages/*/dist/
 # Firebase Admin SDK keys, however they were named when downloaded
 *service-account*.json
 *-firebase-adminsdk-*.json
+
+# Personal Claude Code settings (hooks such as the working-hours guard)
+.claude/settings.local.json
