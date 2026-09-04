@@ -273,7 +273,7 @@ Environment variables (see `.env.example` for comments):
 | `FIREBASE_SERVICE_ACCOUNT_BASE64`  | server  | Service-account JSON, base64-encoded; required in production                                     |
 | `DASHBOARD_ALLOWED_EMAILS`         | server  | Comma-separated owner emails; required in production                                             |
 | `FIRETRACE_KEY_PEPPER`             | server  | Random secret (32+ characters) used to HMAC API keys; changing it invalidates every existing key |
-| `NEXT_PUBLIC_APP_URL`              | both    | Canonical deployment origin, used for Origin checks and copyable snippets                        |
+| `NEXT_PUBLIC_APP_URL`              | both    | Canonical deployment origin, used for Origin checks and the copyable setup panel                 |
 | `FIRETRACE_STORAGE_LIMIT_BYTES`    | server  | Optional; storage-warning allowance, default 1 GiB                                               |
 
 Do not set `FIRETRACE_USE_EMULATORS` or `NEXT_PUBLIC_FIRETRACE_USE_EMULATORS` to `true` on a hosted deployment; production refuses to start with the emulator flag enabled.
@@ -294,7 +294,7 @@ By default only the emails in `DASHBOARD_ALLOWED_EMAILS` can sign in, and every 
 
 ## Send traces
 
-Create a project in the dashboard, open **Settings**, create an API key, and copy it when it is shown. The project page also has a setup panel with the endpoint, a redacted key reference, and both snippets below with your deployment URL filled in.
+Create a project in the dashboard, open **Settings**, create an API key, and copy it when it is shown. The project page also has a setup panel with the endpoint, a redacted key reference, and a one-click prompt that has a coding agent instrument your application for you; the snippets below are the manual route.
 
 ### TypeScript SDK
 

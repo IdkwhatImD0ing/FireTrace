@@ -163,7 +163,7 @@ Set these server-only values in `.env.local` now and in Vercel later (see `.env.
 
 - `DASHBOARD_ALLOWED_EMAILS`: comma-separated emails allowed into the dashboard. Every listed address is a co-owner with access to every project. Addresses are compared lower-cased and must be verified in Firebase (Google accounts are verified automatically). Production refuses to start when this is empty.
 - `FIRETRACE_KEY_PEPPER`: a random secret of at least 32 characters used to HMAC project API keys. Generate one with `openssl rand -base64 48`. Changing it later invalidates every existing API key, so store it somewhere safe.
-- `NEXT_PUBLIC_APP_URL`: the canonical origin of the deployment without a trailing slash (`http://localhost:3000` locally). It is used for Origin checks on cookie-authenticated requests and in the copyable setup snippets.
+- `NEXT_PUBLIC_APP_URL`: the canonical origin of the deployment without a trailing slash (`http://localhost:3000` locally). It is used for Origin checks on cookie-authenticated requests and in the project's copyable setup panel.
 - `FIRETRACE_USE_EMULATORS` and `NEXT_PUBLIC_FIRETRACE_USE_EMULATORS`: `false` whenever you talk to the real project.
 
 ## 10. Smoke test locally against the real project

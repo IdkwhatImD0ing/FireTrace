@@ -154,7 +154,7 @@ export default async function ProjectTracesPage({
           </nav>
           <details className="card p-5">
             <summary className="cursor-pointer font-display text-xl text-ink">
-              Setup: endpoint, key and examples
+              Setup: endpoint, key and agent prompt
             </summary>
             <div className="mt-4">
               <SetupPanel projectId={projectId} appUrl={env.appUrl} keys={keys} />
