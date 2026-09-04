@@ -5,8 +5,7 @@ import { loadDoc } from "@/lib/docs/load";
 import { DOCS, findDoc } from "@/lib/docs/registry";
 import { renderBlocks } from "@/lib/docs/render";
 
-/** Every doc is known at build time; unknown slugs are 404s, never rendered on demand. */
-export const dynamic = "force-static";
+/** Every doc is known at build time; unknown slugs are 404s. */
 export const dynamicParams = false;
 
 export function generateStaticParams() {
