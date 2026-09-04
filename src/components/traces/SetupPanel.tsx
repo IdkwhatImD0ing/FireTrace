@@ -3,64 +3,34 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { redactedKeyReference } from "@/lib/firetrace/api-key-format";
 import type { ApiKeySummary } from "@/lib/firetrace/types";
 
-export function sdkExample(endpoint: string): string {
-  return `import { FireTrace } from "@firetrace/sdk";
+/**
+ * The prompt a user pastes into their coding agent to have it instrument their
+ * own application. It carries this deployment's endpoint and the URLs of the
+ * reference the agent should read, so the panel does not repeat the docs.
+ */
+export function integrationPrompt({
+  appUrl,
+  projectId,
+}: {
+  appUrl: string;
+  projectId: string;
+}): string {
+  return `Instrument this project with FireTrace so every completed LLM or agent run is recorded as one trace.
 
-const client = new FireTrace({
-  endpoint: "${endpoint}",
-  apiKey: process.env.FIRETRACE_API_KEY!,
-});
+FireTrace is a self-hosted tracing service. My deployment:
+- Ingest endpoint (not a secret; keep it in code or config): POST ${appUrl}/api/v1/traces
+- Auth: send "Authorization: Bearer <key>" with the key read from the FIRETRACE_API_KEY environment variable. I have already put the key in .env myself — never hard-code it, never log it, never commit it. Add a FIRETRACE_API_KEY= placeholder to .env.example if this project has one.
+- Contract: fetch ${appUrl}/api/v1/openapi.json for the machine-readable schema, or read ${appUrl}/docs/ingestion-api. Follow it exactly; the API is strict and rejects unknown fields with 400.
 
-const trace = client.startTrace("answer-question", {
-  sessionId: "session-123",
-  input: { prompt },
-});
-const span = trace.startSpan("generate-text", { kind: "llm", model: "example-model" });
-const result = await callModel();
-span.end({ status: "ok", output: { text: result.text }, usage: result.usage });
-await trace.end({ status: "ok", output: { text: result.text } });`;
-}
+Do this:
+1. Read the codebase and list every place where an LLM or agent run starts and ends (chat handlers, agent loops, tool calls, retrieval steps). Show me that list and your plan before you change anything.
+2. Add one small tracing helper that POSTs the payload with the language's built-in HTTP client. Do not add a dependency.
+3. Record one trace per completed run: a fresh 32-hex id, and one span per meaningful step with a 16-hex id that is unique within the trace and a parentSpanId linking the spans into a single tree. Set name, kind (llm, agent, tool, chain, retriever, embedding, reranker or custom), status (ok or error), ISO 8601 startedAt and endedAt, provider and model, and usage tokens whenever the provider returns them. Put the run's request and result in the trace input and output, and fill sessionId and userId wherever the code already has them — those are the dashboard's filters. At most 200 spans per trace, 2 MiB per request.
+4. Send once, after the run has finished — never mid-stream and never in the way of the user's response. Tracing must not be able to break the app: catch every failure from the send, log a warning, and carry on. Retry only network errors, 429 and 5xx with backoff; any other 4xx means the payload is wrong, so fix it instead of retrying.
+5. Redact secrets and personal data from input, output, metadata and attributes before sending. FireTrace stores traces forever; nothing expires.
+6. Verify: run one real flow and confirm the API answered 201 (a 200 with "duplicate": true means the same trace id and body was sent twice). Then tell me to open ${appUrl}/projects/${projectId} and check the trace's span tree, waterfall and inspector.
 
-export function curlExample(endpoint: string): string {
-  return `curl -X POST ${endpoint} \\
-  -H "Authorization: Bearer $FIRETRACE_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "schemaVersion": 1,
-    "trace": {
-      "id": "42f38ac8295345a7a12c4e3f60d6da23",
-      "name": "answer-question",
-      "status": "ok",
-      "startedAt": "2026-09-02T19:01:02.120Z",
-      "endedAt": "2026-09-02T19:01:04.812Z",
-      "model": "example-model",
-      "spans": [
-        { "id": "00f067aa0ba902b7", "parentSpanId": null, "name": "answer-question", "kind": "agent",
-          "status": "ok", "startedAt": "2026-09-02T19:01:02.120Z", "endedAt": "2026-09-02T19:01:04.812Z" },
-        { "id": "b7ad6b7169203331", "parentSpanId": "00f067aa0ba902b7", "name": "generate-text", "kind": "llm",
-          "status": "ok", "model": "example-model",
-          "startedAt": "2026-09-02T19:01:02.350Z", "endedAt": "2026-09-02T19:01:04.600Z",
-          "usage": { "inputTokens": 120, "outputTokens": 84, "totalTokens": 204 } }
-      ]
-    }
-  }'`;
-}
-
-/** MCP client configuration (Claude Code, Claude Desktop, Cursor, …) for the remote endpoint. */
-export function mcpExample(appUrl: string): string {
-  return `{
-  "mcpServers": {
-    "firetrace": {
-      "type": "http",
-      "url": "${appUrl}/api/mcp",
-      "headers": { "Authorization": "Bearer ft_live_..." }
-    }
-  }
-}`;
-}
-
-export function mcpStdioExample(appUrl: string): string {
-  return `FIRETRACE_ENDPOINT=${appUrl} FIRETRACE_API_KEY=ft_live_... npx @firetrace/mcp`;
+Finish by reporting which files you changed, where traces are created, and anything you deliberately left uninstrumented.`;
 }
 
 export function SetupPanel({
@@ -74,6 +44,7 @@ export function SetupPanel({
 }) {
   const endpoint = `${appUrl}/api/v1/traces`;
   const activeKeys = keys.filter((k) => !k.revokedAt);
+  const prompt = integrationPrompt({ appUrl, projectId });
   return (
     <section className="card p-5" aria-labelledby="setup-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -81,10 +52,11 @@ export function SetupPanel({
           <h2 id="setup-title" className="font-display text-2xl text-ink">
             Send traces to this project
           </h2>
-          <p className="mt-1 text-sm text-ink-2">
-            One POST per completed run. Full reference in{" "}
-            <code className="font-mono text-ink">docs/api.md</code>; agents can also work with
-            traces over MCP (<code className="font-mono text-ink">docs/mcp.md</code>).
+          <p className="mt-1 max-w-2xl text-sm text-ink-2">
+            Put a key in your app&apos;s <code className="font-mono text-ink">.env</code> as{" "}
+            <code className="font-mono text-ink">FIRETRACE_API_KEY</code>, then paste the prompt
+            below into your coding agent. It reads the API reference from this deployment and wires
+            up the tracing itself.
           </p>
         </div>
         <Link href={`/projects/${projectId}/settings`} className="btn btn-ghost btn-sm">
@@ -123,44 +95,29 @@ export function SetupPanel({
         </div>
       </dl>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <div>
-          <div className="flex items-center justify-between">
-            <span className="mono-label">TypeScript SDK</span>
-            <CopyButton text={sdkExample(endpoint)} />
-          </div>
-          <pre className="pre mt-1.5 overflow-x-auto">{sdkExample(endpoint)}</pre>
+      <div className="mt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="mono-label">Prompt for your coding agent</span>
+          <CopyButton text={prompt} label="Copy prompt" className="btn btn-primary btn-sm" />
         </div>
-        <div>
-          <div className="flex items-center justify-between">
-            <span className="mono-label">curl</span>
-            <CopyButton text={curlExample(endpoint)} />
-          </div>
-          <pre className="pre mt-1.5 overflow-x-auto">{curlExample(endpoint)}</pre>
-        </div>
-        <div>
-          <div className="flex items-center justify-between">
-            <span className="mono-label">MCP · remote (Claude Code, Cursor, Desktop)</span>
-            <CopyButton text={mcpExample(appUrl)} />
-          </div>
-          <pre className="pre mt-1.5 overflow-x-auto">{mcpExample(appUrl)}</pre>
-          <p className="mt-1.5 text-xs text-ink-3">
-            Tools offered follow the key&apos;s scopes: read keys can list and inspect traces, write
-            keys can record them, delete keys can remove them.
-          </p>
-        </div>
-        <div>
-          <div className="flex items-center justify-between">
-            <span className="mono-label">MCP · stdio bridge</span>
-            <CopyButton text={mcpStdioExample(appUrl)} />
-          </div>
-          <pre className="pre mt-1.5 overflow-x-auto">{mcpStdioExample(appUrl)}</pre>
-          <p className="mt-1.5 text-xs text-ink-3">
-            For clients that only speak stdio. It calls the REST API with the same key; no Firebase
-            credentials leave the deployment.
-          </p>
-        </div>
+        <pre className="pre mt-1.5 max-h-96 overflow-y-auto">{prompt}</pre>
       </div>
+
+      <p className="mt-3 text-xs text-ink-3">
+        Wiring it up by hand instead? The{" "}
+        <Link href="/docs/ingestion-api" className="underline">
+          ingestion API
+        </Link>
+        ,{" "}
+        <Link href="/docs/api" className="underline">
+          REST API
+        </Link>{" "}
+        and{" "}
+        <Link href="/docs/mcp" className="underline">
+          MCP server
+        </Link>{" "}
+        are documented in full.
+      </p>
     </section>
   );
 }

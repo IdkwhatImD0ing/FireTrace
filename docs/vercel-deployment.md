@@ -33,7 +33,7 @@ Add each variable under **Settings > Environment Variables** and tick the enviro
 Notes:
 
 - **Preview environments share Firestore with production unless you give them their own Firebase project.** Previews use whatever `NEXT_PUBLIC_FIREBASE_PROJECT_ID` and service account you assign to the Preview environment. For isolation, repeat `docs/firebase-setup.md` for a second Firebase project and assign its values to Preview only.
-- `NEXT_PUBLIC_APP_URL` on previews: cookie-authenticated requests are accepted from both the configured URL and the request's own host (`src/lib/auth/origin.ts` reads `x-forwarded-host`), so previews work even though their hostname is generated. The value only affects the URLs shown in the setup panel snippets.
+- `NEXT_PUBLIC_APP_URL` on previews: cookie-authenticated requests are accepted from both the configured URL and the request's own host (`src/lib/auth/origin.ts` reads `x-forwarded-host`), so previews work even though their hostname is generated. The value only affects the URLs shown in the project's setup panel.
 - Vercel sets `NODE_ENV=production` for both Production and Preview deployments, so both run in fail-closed mode: the allowlist, the service account, and a 32+ character pepper are all required, and the session cookie is marked `Secure`.
 - Server-side variables are read at runtime; after changing one, redeploy so running functions pick it up. `NEXT_PUBLIC_*` variables are inlined into the client bundle at build time and always require a redeploy.
 
@@ -74,7 +74,7 @@ FIRETRACE_ENDPOINT=https://<your-domain> FIRETRACE_API_KEY=ft_live_... pnpm trac
 
 The script (`scripts/send-example-trace.ts`) uses the SDK to send one trace with an agent root span, a tool span, and an LLM span, then prints `Stored trace <id> (3 spans) in project <projectId>` and the URL of the trace page. Open it and confirm the tree, the waterfall, and the inspector tabs render. Run the command a second time: the response is a duplicate (`200`, `"duplicate": true`) and the project's trace count does not change.
 
-Without Node.js, use the curl example from the project's setup panel or from `docs/ingestion-api.md`.
+Without Node.js, use the curl example from `docs/ingestion-api.md`.
 
 ## Operational notes
 
