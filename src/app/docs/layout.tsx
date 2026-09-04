@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Brand } from "@/components/Brand";
 import { DocsNav } from "@/components/docs/DocsNav";
+import { getOwner } from "@/lib/auth/session";
 import { DEFAULT_REPOSITORY_URL } from "@/lib/env/server";
 
 export const metadata: Metadata = {
@@ -10,12 +11,19 @@ export const metadata: Metadata = {
   description: "Guides and reference for deploying and using FireTrace.",
 };
 
+/**
+ * The header shows the visitor's own session state, so the docs route renders
+ * per request instead of being prerendered. The pages themselves stay public.
+ */
+export const dynamic = "force-dynamic";
+
 /** Public documentation shell: no session required, rendered from docs/*.md. */
-export default function DocsLayout({ children }: { children: ReactNode }) {
+export default async function DocsLayout({ children }: { children: ReactNode }) {
   const repoUrl = (process.env.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL).replace(
     /\/+$/,
     "",
   );
+  const owner = await getOwner();
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-30 border-b border-line bg-bg">
@@ -33,9 +41,15 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
             <a href={repoUrl} className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer">
               GitHub
             </a>
-            <Link href="/login" className="btn btn-primary btn-sm">
-              Sign in
-            </Link>
+            {owner ? (
+              <Link href="/projects" className="btn btn-primary btn-sm">
+                Projects
+              </Link>
+            ) : (
+              <Link href="/login" className="btn btn-primary btn-sm">
+                Sign in
+              </Link>
+            )}
           </div>
         </div>
       </header>

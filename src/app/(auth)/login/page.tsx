@@ -7,7 +7,11 @@ import { getOwner } from "@/lib/auth/session";
 import { clientEnvProblems } from "@/lib/env/client";
 import { configStatus, trialTraceLimitFromEnv } from "@/lib/env/server";
 
-export const metadata: Metadata = { title: "Sign in" };
+export const metadata: Metadata = {
+  title: "Sign in",
+  description: "Sign in to your FireTrace dashboard.",
+  robots: { index: false, follow: false },
+};
 
 /** Configuration status must be evaluated per request, never baked in at build time. */
 export const dynamic = "force-dynamic";

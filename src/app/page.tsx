@@ -4,6 +4,7 @@ import { TraceExplorer } from "@/components/trace/TraceExplorer";
 import { normalizeIngestBody } from "@/lib/firetrace/normalize";
 import { sampleTraceRequest } from "@/lib/firetrace/sample";
 import type { SpanDetail, TraceDetail } from "@/lib/firetrace/types";
+import { getOwner } from "@/lib/auth/session";
 import { trialTraceLimitFromEnv } from "@/lib/env/server";
 
 const REPO_URL =
@@ -55,11 +56,12 @@ const POINTS = [
   },
 ];
 
-/** The trial invite must reflect the runtime environment, never a build-time snapshot. */
+/** The trial invite and the session-aware header must reflect the request, never a build-time snapshot. */
 export const dynamic = "force-dynamic";
 
-export default function LandingPage() {
+export default async function LandingPage() {
   const TRIAL_LIMIT = trialTraceLimitFromEnv();
+  const owner = await getOwner();
   const preview = previewData();
   return (
     <div className="flex min-h-screen flex-col">
@@ -75,9 +77,15 @@ export default function LandingPage() {
             <a href={REPO_URL} className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer">
               View GitHub
             </a>
-            <Link href="/login" className="btn btn-primary btn-sm">
-              Sign in
-            </Link>
+            {owner ? (
+              <Link href="/projects" className="btn btn-primary btn-sm">
+                Projects
+              </Link>
+            ) : (
+              <Link href="/login" className="btn btn-primary btn-sm">
+                Sign in
+              </Link>
+            )}
           </div>
         </div>
       </header>
@@ -107,7 +115,7 @@ export default function LandingPage() {
               View GitHub
             </a>
           </div>
-          {TRIAL_LIMIT > 0 && (
+          {TRIAL_LIMIT > 0 && !owner && (
             <p className="mt-4 max-w-2xl text-sm text-ink-2" data-testid="trial-invite">
               This instance is its owner&apos;s personal deployment. You can{" "}
               <Link href="/login" className="underline">

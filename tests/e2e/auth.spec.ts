@@ -35,6 +35,25 @@ test.describe("dashboard sign-in through the Auth emulator", () => {
     expect((await context.cookies()).some((c) => c.name === SESSION_COOKIE)).toBe(true);
   });
 
+  test("the public headers offer sign-in only while there is no session", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator('header a[href="/login"]')).toHaveText("Sign in");
+    await expect(page.getByTestId("trial-invite")).toBeVisible();
+    await page.goto("/docs");
+    await expect(page.locator('header a[href="/login"]')).toHaveText("Sign in");
+
+    await signIn(page, OWNER);
+    await page.waitForURL(/\/projects$/);
+
+    await page.goto("/");
+    await expect(page.locator('header a[href="/projects"]')).toHaveText("Projects");
+    await expect(page.locator('header a[href="/login"]')).toHaveCount(0);
+    await expect(page.getByTestId("trial-invite")).toHaveCount(0);
+    await page.goto("/docs");
+    await expect(page.locator('header a[href="/projects"]')).toHaveText("Projects");
+    await expect(page.locator('header a[href="/login"]')).toHaveCount(0);
+  });
+
   test("a wrong password is rejected and gets no session", async ({ page, context }) => {
     await signIn(page, { email: OWNER.email, password: "definitely-not-the-password" });
     await expect(alerts(page)).toBeVisible();
