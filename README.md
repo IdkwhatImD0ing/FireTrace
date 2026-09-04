@@ -16,9 +16,9 @@ Concretely, the codebase has no `expireAt` field, no Firestore TTL policy, no cl
 
 - Multiple **projects** as trace namespaces inside one deployment.
 - Per-project **API keys** (`ft_live_…`) that are shown once, stored only as an HMAC digest, carry **scopes** (`traces:write`, `traces:read`, `traces:delete`) and an optional expiry, and can be revoked or rotated.
-- A language-neutral **REST API** ([docs/api.md](docs/api.md), OpenAPI at `/api/v1/openapi.json`): `POST /api/v1/traces` records one complete, immutable trace with idempotent retries; `GET` routes list and read traces and the project; `DELETE` removes a trace explicitly.
-- An **MCP server** ([docs/mcp.md](docs/mcp.md)) so AI agents can list, inspect, record, and delete traces: a remote endpoint at `/api/mcp` on every deployment plus a stdio bridge (`packages/mcp-server`, `@firetrace/mcp`). Tools follow the key's scopes.
-- A small **TypeScript SDK** (`packages/sdk-js`) with retries, redaction, content truncation, safe error capture, and a read client for the API.
+- A language-neutral **REST API** ([docs/api.md](docs/api.md), OpenAPI at `/api/v1/openapi.json`): `POST /api/v1/traces` records one complete trace with idempotent retries; `PATCH /api/v1/traces/{id}` merges keys into that trace's `metadata`, the one mutable part, so ratings and evaluations that arrive after the run have somewhere to go; `GET` routes list and read traces and the project; `DELETE` removes a trace explicitly.
+- An **MCP server** ([docs/mcp.md](docs/mcp.md)) so AI agents can list, inspect, record, annotate, and delete traces: a remote endpoint at `/api/mcp` on every deployment plus a stdio bridge (`packages/mcp-server`, `@firetrace/mcp`). Tools follow the key's scopes.
+- A small **TypeScript SDK** (`packages/sdk-js`) with retries, redaction, content truncation, safe error capture, and a read client for the API that also patches trace metadata.
 - A **trace list** with status, model, session, user, and time-range filters, URL-backed filter state, and cursor pagination (50 per page).
 - A **trace page** with a span tree and duration waterfall, an inspector (Overview, Input, Output, Attributes, Events, Error), and a canonical-JSON download.
 - **Owner-only access**: Firebase sign-in, a server-verified session cookie, and an email allowlist. Firestore rules deny every direct client read and write.
@@ -54,12 +54,12 @@ One FireTrace deployment connects to one Firebase project. Inside it, `projects/
 
 Firestore collections:
 
-| Path                                            | Contents                                                                                                                                        |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                 |
-| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                           |
-| `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, usage, cost, counts, bodyHash, estimatedBytes) |
-| `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                   |
+| Path                                            | Contents                                                                                                                                                           |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                                    |
+| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                                              |
+| `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, metadataUpdatedAt, usage, cost, counts, bodyHash, estimatedBytes) |
+| `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                                      |
 
 Composite indexes and the single-field exemptions for large payload fields live in `firestore.indexes.json`.
 
@@ -366,7 +366,7 @@ Trace ids are 32 lowercase hex characters and span ids are 16; generate fresh ra
 
 ```text
 src/app/                      Next.js App Router: landing, (auth)/login, (dashboard)/projects/..., api/
-src/app/api/v1/traces/        POST ingestion route
+src/app/api/v1/traces/        POST ingestion route, GET list, per-trace read/patch/delete
 src/app/api/auth/session/     POST (sign-in) and DELETE (sign-out) session cookie
 src/app/api/health/           configuration booleans
 src/app/api/projects/[projectId]/traces/[traceId]/export/   owner-only canonical JSON download
@@ -374,8 +374,9 @@ src/components/               UI (auth, dashboard shell, projects, settings, tra
 src/lib/env/                  server.ts (fail-closed server config), client.ts (browser config)
 src/lib/firebase/             admin.ts (Admin SDK, server-only), client.ts (Web SDK, sign-in only)
 src/lib/auth/                 session.ts (cookie + allowlist), origin.ts (Origin check)
-src/lib/firetrace/            schema, normalize, hash, ids, tree, api-keys, ingest, projects, queries, storage, sample
+src/lib/firetrace/            schema, normalize, hash, ids, tree, api-keys, ingest, metadata, projects, queries, storage, sample
 src/lib/actions.ts            server actions for dashboard mutations
+scripts/                      seed-emulator, send-example-trace, backfill-feedback-metadata
 packages/sdk-js/              @firetrace/sdk (TypeScript, Node 22+)
 packages/mcp-server/          @firetrace/mcp (MCP tools, HTTP backend, stdio bridge)
 scripts/                      seed-emulator.ts, send-example-trace.ts
@@ -409,9 +410,9 @@ firestore.indexes.json        composite indexes and payload-field exemptions
 ## Current limitations
 
 - One deployment serves one Firebase project. Every email in `DASHBOARD_ALLOWED_EMAILS` is a co-owner with access to every project; there are no per-project human permissions, invitations, or roles.
-- Traces are complete and immutable. There is no streaming or partial-trace update; re-sending a trace id with different content is rejected with `409`.
+- Traces are complete and, apart from `metadata`, immutable. There is no streaming or partial-trace update; re-sending a trace id with different content is rejected with `409`. `PATCH /api/v1/traces/{id}` merges into `metadata` only, shallowly and last-writer-wins: no history, no conflict detection, and `bodyHash` keeps describing the body as ingested rather than the document as it stands. `metadataUpdatedAt` is the only marker that a trace was edited afterwards.
 - Limits per trace: 200 spans, 50 events per span, 20 tags, a 2 MiB request body, and 750 KiB per stored document (see `docs/ingestion-api.md`).
-- Filters are exact matches on status, model, session id, and user id plus a time range. There is no full-text search over prompts or responses.
+- Filters are exact matches on status, model, session id, and user id plus a time range. Metadata is deliberately not indexed, so it cannot be filtered, ordered, or aggregated by — deriving something like a satisfaction rate from patched metadata means fetching the traces and reducing them client-side. There is no full-text search over prompts or responses.
 - No native OTLP ingestion and no Python, Go, or Java SDK; non-JavaScript applications use the HTTP API directly.
 - No built-in price tables: `costUsd` is whatever the caller supplies.
 - No application-level rate limiting. `429` is returned only when Firestore reports an exhausted quota.

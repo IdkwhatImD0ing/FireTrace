@@ -1,8 +1,8 @@
 # Ingestion API reference
 
-This page covers `POST /api/v1/traces` in depth. The rest of the key-authenticated API (list, read, delete, project, key, OpenAPI) is documented in [api.md](./api.md) and the MCP server in [mcp.md](./mcp.md).
+This page covers `POST /api/v1/traces` and `PATCH /api/v1/traces/{traceId}` in depth, plus the single-trace read they pair with. The rest of the key-authenticated API (list, delete, project, key, OpenAPI) is documented in [api.md](./api.md) and the MCP server in [mcp.md](./mcp.md).
 
-FireTrace accepts completed traces over plain HTTPS so any language can integrate. This document is derived from `src/lib/firetrace/schema.ts` (wire schema and limits), `src/lib/firetrace/normalize.ts` (semantic checks and normalization), `src/lib/firetrace/ingest.ts` (authentication and the idempotent transaction), and `src/app/api/v1/traces/route.ts` (the route handler). When those files change, this document must change with them.
+FireTrace accepts completed traces over plain HTTPS so any language can integrate. This document is derived from `src/lib/firetrace/schema.ts` (wire schema and limits), `src/lib/firetrace/normalize.ts` (semantic checks and normalization), `src/lib/firetrace/ingest.ts` (authentication and the idempotent transaction), `src/lib/firetrace/metadata.ts` (the metadata patch and its transaction), and the route handlers under `src/app/api/v1/traces/`. When those files change, this document must change with them.
 
 ## Endpoint
 
@@ -12,7 +12,7 @@ Authorization: Bearer ft_live_<keyId>_<secret>
 Content-Type: application/json
 ```
 
-- One request stores exactly one complete, immutable trace with all of its spans. There is no streaming, batching, or update endpoint.
+- One request stores exactly one complete trace with all of its spans. There is no streaming and no batching. Once stored, a trace is immutable apart from its `metadata`, which [`PATCH`](#updating-metadata) can merge into for judgements that only arrive after the run.
 - The route runs in the Node.js runtime on the server. It sets `Cache-Control: no-store` and an `X-Request-Id` header on every response and sends no CORS headers; it is intended for server-to-server calls, not browsers.
 - `GET /api/v1/traces` returns `405` with code `invalid_request`.
 
@@ -136,7 +136,7 @@ Traces are immutable. Because the hash is computed after normalization, requests
 | Exists with the same `bodyHash`                  | Nothing written; `200` with `"duplicate": true`; counters unchanged |
 | Exists with a different `bodyHash`               | `409 trace_id_conflict`; nothing written                            |
 
-Retrying a request after a timeout is therefore safe.
+Retrying a request after a timeout is therefore safe. [Patching metadata](#updating-metadata) deliberately leaves `bodyHash` alone, so a resend of the original body is still a duplicate rather than a conflict.
 
 ## Responses
 
@@ -281,9 +281,133 @@ TRACE_ID=$(openssl rand -hex 16)   # 32 hex characters
 SPAN_ID=$(openssl rand -hex 8)     # 16 hex characters
 ```
 
+## Updating metadata
+
+A trace is written once and never rewritten — with one exception. `metadata` is the place for facts that only exist after the run finished: a reader's thumbs rating, a reviewer's verdict, an overnight eval result, a business outcome that resolves hours later.
+
+```http
+PATCH /api/v1/traces/{traceId}
+Authorization: Bearer ft_live_<keyId>_<secret>
+Content-Type: application/json
+
+{ "metadata": { "feedback": 0, "feedbackLabel": "thumbs-down" } }
+```
+
+This needs the `traces:write` scope — the same scope the application already holds to record traces, so an embedded SDK key can rate its own traces without a second credential.
+
+### Rules
+
+- **`metadata` is the only field accepted.** The body is strict: `name`, `status`, `spans`, or anything else is a `400 invalid_request` that names the field. Everything the trace was ingested with stays immutable, spans included.
+- **The merge is shallow.** A key in the patch replaces that top-level key outright, nested objects included; keys the patch does not mention are left alone. To change one field inside a nested object, send the whole object.
+- **Last writer wins.** Two patches of different keys both survive. Two patches of the same key resolve to whichever committed last, with no record that the other happened — there is no history and no conflict detection.
+- **`bodyHash` is not recomputed.** It keeps describing the body as ingested, so re-sending the original trace after a patch is still recognised as a duplicate (`200`) instead of a `409 trace_id_conflict`. The corollary: after a patch, `bodyHash` no longer describes what the document currently holds.
+- **Metadata is not indexed.** `firestore.indexes.json` exempts it, because it holds arbitrary caller JSON and Firestore rejects writes with indexed strings over 1,500 bytes. You cannot filter, order, or aggregate traces by a metadata value, and `GET /api/v1/traces` has no metadata filter. Deriving something like a satisfaction rate means fetching the traces and reducing them client-side.
+- **Repeating a patch writes nothing.** When the merge produces exactly what is already stored, the response is `200` with `"changed": false`, and neither the document nor `metadataUpdatedAt` moves.
+
+### What the patch changes
+
+`metadata`, plus two pieces of bookkeeping:
+
+- `metadataUpdatedAt` — a server timestamp, `null` on traces that have never been patched. It is the only way to tell a trace that was edited after ingestion from one that was not, so keep it in mind when reading metadata as evidence.
+- `estimatedBytes` on both the trace and its project, adjusted by the size delta, so the storage estimate stays honest.
+
+Nothing else on the trace or its spans is touched.
+
+### Convention
+
+Metadata now holds two kinds of thing with nothing structural to separate them: facts the caller knew at ingestion time, and judgements added afterwards. Prefixing the later ones (`feedback.*`, `review.*`, `eval.*`) keeps them legible to whoever reads the trace next, and makes a future migration to a dedicated resource a mechanical one. FireTrace does not enforce this.
+
+### Responses
+
+```json
+{
+  "ok": true,
+  "traceId": "42f38ac8295345a7a12c4e3f60d6da23",
+  "metadata": { "route": "/api/chat", "feedback": 0, "feedbackLabel": "thumbs-down" },
+  "changed": true,
+  "requestId": "0f1e2d3c4b5a6978"
+}
+```
+
+`metadata` is the full merged object, so a client that lost a race can see what actually won.
+
+| HTTP | `code`               | When                                                                                                                                                                       |
+| ---- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `invalid_json`       | Body is not valid JSON.                                                                                                                                                    |
+| 400  | `invalid_request`    | `metadata` missing or not an object, a field other than `metadata`, or a key Firestore refuses (empty, `__name__`-shaped, over 1,500 bytes, nested deeper than 20 levels). |
+| 401  | `invalid_api_key`    | Missing, malformed, unknown, revoked, or expired key.                                                                                                                      |
+| 403  | `insufficient_scope` | The key lacks `traces:write`.                                                                                                                                              |
+| 404  | `not_found`          | No such trace in this key's project. A key for one project can never patch another's.                                                                                      |
+| 413  | `payload_too_large`  | Request over 2 MiB, or the merged trace document over 750 KiB.                                                                                                             |
+| 429  | `quota_exhausted`    | Firestore refused the write. Nothing was stored.                                                                                                                           |
+
+### Example
+
+```bash
+curl -X PATCH https://your-deployment.example/api/v1/traces/$TRACE_ID \
+  -H "Authorization: Bearer $FIRETRACE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata":{"feedback":1,"feedbackLabel":"thumbs-up"}}'
+```
+
+The merged metadata is visible immediately on the trace page's **Metadata** tab.
+
+The TypeScript SDK wraps the same call as `api.patchMetadata(traceId, metadata)` ([packages/sdk-js](../packages/sdk-js/README.md)), and agents can reach it over MCP as `patch_trace_metadata` ([mcp.md](./mcp.md)).
+
+### Migrating the linked-trace workaround
+
+Integrations built before this endpoint existed often recorded a second, zero-duration trace whose metadata pointed back at the real one (`metadata.feedbackFor`). Those stand-ins inflate trace counts, drag down latency averages, and spend quota on records that are not LLM calls. `scripts/backfill-feedback-metadata.ts` folds each one into its target's metadata and deletes it:
+
+```bash
+# Dry run first: reports every merge it would make and writes nothing.
+pnpm exec tsx scripts/backfill-feedback-metadata.ts --project <projectId>
+pnpm exec tsx scripts/backfill-feedback-metadata.ts --project <projectId> --apply
+```
+
+Keys are prefixed (`feedback.` by default, `--prefix` to change it) and `feedback.migratedFrom` records which stand-in they came from. A stand-in whose target no longer exists is reported and left in place rather than deleted, so feedback is never destroyed just because it cannot be migrated; one failing candidate is skipped rather than stranding the rest; and re-running is safe. Because metadata is not indexed, finding candidates means scanning the project's traces — expect one document read per trace.
+
 ## Reading traces back
 
-Keys with the `traces:read` scope can list and fetch traces through `GET /api/v1/traces` and `GET /api/v1/traces/{traceId}`, and `traces:delete` keys can remove them; see [api.md](./api.md). AI agents can do the same over MCP ([mcp.md](./mcp.md)). Recording requires the `traces:write` scope. Owners also read traces in the dashboard and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
+Keys with the `traces:read` scope can list and fetch traces; `traces:delete` keys can remove them.
+
+### `GET /api/v1/traces/{traceId}`
+
+One trace with every span:
+
+```json
+{
+  "trace": {
+    "id": "42f38ac8295345a7a12c4e3f60d6da23",
+    "name": "answer-question",
+    "status": "ok",
+    "startedAt": "2026-09-02T19:01:02.120Z",
+    "endedAt": "2026-09-02T19:01:04.812Z",
+    "durationMs": 2692,
+    "provider": null,
+    "model": "example-model",
+    "sessionId": "session-123",
+    "userId": null,
+    "tags": [],
+    "usage": { "inputTokens": 120, "outputTokens": 84, "totalTokens": 204 },
+    "costUsd": null,
+    "spanCount": 2,
+    "errorCount": 0,
+    "estimatedBytes": 4310,
+    "ingestedAt": "2026-09-02T19:01:05.004Z",
+    "schemaVersion": 1,
+    "bodyHash": "…",
+    "input": null,
+    "output": null,
+    "metadata": { "route": "/api/chat" },
+    "metadataUpdatedAt": null
+  },
+  "spans": []
+}
+```
+
+`durationMs`, `spanCount`, and `errorCount` are computed at ingestion, not sent by the caller. Spans come back ordered by `startedAt`, then id. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace belonging to another project. `metadataUpdatedAt` was added with the metadata patch and is `null` on every trace recorded before it; a client validating this response strictly must allow the extra key.
+
+`GET /api/v1/traces` lists traces newest first with cursor pagination and filters on status, model, session id, user id, and a time range; AI agents can read the same data over MCP ([mcp.md](./mcp.md)). Both are documented in [api.md](./api.md). Recording requires the `traces:write` scope. Owners also read traces in the dashboard and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
 
 ## Versioning
 

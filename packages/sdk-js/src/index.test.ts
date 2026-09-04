@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyRedaction,
   FireTrace,
+  FireTraceApi,
   FireTraceError,
   generateSpanId,
   generateTraceId,
@@ -893,5 +894,54 @@ describe("FireTrace transport", () => {
     expect(must(calls[0]).signal?.aborted).toBe(true);
     expect(must(calls[1]).signal?.aborted).toBe(false);
     expect(must(calls[0]).signal).not.toBe(must(calls[1]).signal);
+  });
+});
+
+describe("FireTraceApi.patchMetadata", () => {
+  /** The shared fakeFetch parses every request body, which a GET does not have. */
+  function apiFetch(respond: (url: string, init: RequestInit) => Response) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fn: typeof fetch = async (input, init = {}) => {
+      const url = typeof input === "string" ? input : (input as URL | Request).toString();
+      calls.push({ url, init });
+      return respond(url, init);
+    };
+    return { fn, calls };
+  }
+
+  it("PATCHes the trace with a metadata envelope and returns the merged object", async () => {
+    const { fn, calls } = apiFetch(() =>
+      jsonResponse(200, {
+        ok: true,
+        traceId: TRACE_ID,
+        metadata: { route: "/api/chat", feedback: 1 },
+        changed: true,
+        requestId: "req-1",
+      }),
+    );
+    const api = new FireTraceApi({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    const result = await api.patchMetadata(TRACE_ID, { feedback: 1 });
+
+    expect(result.changed).toBe(true);
+    expect(result.metadata).toEqual({ route: "/api/chat", feedback: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(`${ENDPOINT}/api/v1/traces/${TRACE_ID}`);
+    expect(calls[0].init.method).toBe("PATCH");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ metadata: { feedback: 1 } });
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${KEY}`);
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("raises the server's error envelope, unlike the never-throwing record path", async () => {
+    const { fn } = apiFetch(() =>
+      jsonResponse(404, errorBody("not_found", "No such trace in this project.", "req-404")),
+    );
+    const api = new FireTraceApi({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    await expect(api.patchMetadata(TRACE_ID, { feedback: 1 })).rejects.toMatchObject({
+      status: 404,
+      code: "not_found",
+      requestId: "req-404",
+    });
   });
 });

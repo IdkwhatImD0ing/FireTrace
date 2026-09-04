@@ -115,6 +115,7 @@ export function toTraceDetail(id: string, d: DocumentData): TraceDetail {
     input: d.input === undefined ? null : (d.input as JsonValue),
     output: d.output === undefined ? null : (d.output as JsonValue),
     metadata: obj(d.metadata),
+    metadataUpdatedAt: iso(d.metadataUpdatedAt),
   };
 }
 

@@ -11,11 +11,11 @@ Everything a program can do against a FireTrace deployment goes through the key-
 
 Keys are created per project under **Project → Settings → API keys**. Only an HMAC digest of the secret is stored, so the plaintext is shown once. Each key carries the scopes you choose at creation:
 
-| Scope           | Grants                                                                                 |
-| --------------- | -------------------------------------------------------------------------------------- |
-| `traces:write`  | `POST /api/v1/traces`; MCP `record_trace`, `get_ingest_schema`                         |
-| `traces:read`   | `GET /api/v1/traces`, `GET /api/v1/traces/{id}`, `GET /api/v1/project`; MCP read tools |
-| `traces:delete` | `DELETE /api/v1/traces/{id}`; MCP `delete_trace`                                       |
+| Scope           | Grants                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------- |
+| `traces:write`  | `POST /api/v1/traces`, `PATCH /api/v1/traces/{id}`; MCP `record_trace`, `get_ingest_schema` |
+| `traces:read`   | `GET /api/v1/traces`, `GET /api/v1/traces/{id}`, `GET /api/v1/project`; MCP read tools      |
+| `traces:delete` | `DELETE /api/v1/traces/{id}`; MCP `delete_trace`                                            |
 
 `GET /api/v1/key` needs no scope. Defaults for a new key are `traces:write` + `traces:read`; an SDK embedded in an application usually only needs `traces:write`. Keys created before scopes existed behave as `traces:write` only.
 
@@ -129,7 +129,7 @@ One trace with all of its spans, ordered by `startedAt` then id. Trace ids are m
 
 ```json
 {
-  "trace": { "...summary fields...", "input": {}, "output": {}, "metadata": {}, "bodyHash": "…" },
+  "trace": { "...summary fields...", "input": {}, "output": {}, "metadata": {}, "metadataUpdatedAt": null, "bodyHash": "…" },
   "spans": [
     {
       "id": "00f067aa0ba902b7",
@@ -154,9 +154,46 @@ One trace with all of its spans, ordered by `startedAt` then id. Trace ids are m
 }
 ```
 
+### `PATCH /api/v1/traces/{traceId}` — scope `traces:write`
+
+Shallow-merge keys into a stored trace's `metadata`. This is the only mutable part of a trace: it exists so evaluations that arrive after the run — a thumbs rating, a reviewer's verdict, an eval score, a business outcome — have somewhere to live. Everything the trace was ingested with, spans included, stays write-once. The full reference is in [ingestion-api.md](./ingestion-api.md#updating-metadata).
+
+```bash
+curl -X PATCH https://tracing.art3m1s.me/api/v1/traces/$TRACE_ID \
+  -H "Authorization: Bearer $FIRETRACE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata":{"feedback":1,"feedbackLabel":"thumbs-up"}}'
+```
+
+```json
+{
+  "ok": true,
+  "traceId": "42f38ac8295345a7a12c4e3f60d6da23",
+  "metadata": { "route": "/api/chat", "feedback": 1, "feedbackLabel": "thumbs-up" },
+  "changed": true,
+  "requestId": "0f1e2d3c4b5a6978"
+}
+```
+
+| Status | Meaning                                                                                                                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 200    | Merged. `metadata` is the full merged object; `changed: false` means it already matched and nothing was written                       |
+| 400    | `invalid_json`, or `invalid_request` — `metadata` missing or not an object, a field other than `metadata`, or a key Firestore refuses |
+| 404    | `not_found`: no such trace in this key's project                                                                                      |
+| 413    | `payload_too_large`: request over 2 MiB, or the merged document over 750 KiB                                                          |
+| 429    | `quota_exhausted`: Firestore refused the write; nothing was stored                                                                    |
+
+Three things to know before you build on it:
+
+- The merge is **shallow** and **last-writer-wins**. A patched key replaces that top-level key outright, and two writers racing on the same key leave no trace of the loser.
+- `bodyHash` is **not** recomputed, so re-sending the original trace after a patch is still a `200` duplicate rather than a `409`. It describes the body as ingested, not the document as it stands.
+- Metadata is **not indexed**, so there is no metadata filter on `GET /api/v1/traces` and no server-side aggregation. Deriving a satisfaction rate means fetching traces and reducing them client-side.
+
+`metadataUpdatedAt` on the trace (see `GET /api/v1/traces/{traceId}`) is the only marker distinguishing a trace that was edited after ingestion from one that was not.
+
 ### `DELETE /api/v1/traces/{traceId}` — scope `traces:delete`
 
-Delete the trace and every span under it, then correct the project counters. Returns `{ "ok": true, "traceId" }` or `404 not_found`. This and the dashboard are the only two ways data leaves Firestore: FireTrace never sets TTLs or deletes on its own.
+Delete the trace, every span under it, and any patched metadata with them, then correct the project counters. Returns `{ "ok": true, "traceId" }` or `404 not_found`. This and the dashboard are the only two ways data leaves Firestore: FireTrace never sets TTLs or deletes on its own.
 
 ### `POST /api/mcp`
 
@@ -179,6 +216,7 @@ const key = await api.getKey(); // verify scopes at startup
 const page = await api.listTraces({ status: "error", limit: 20 });
 for await (const trace of api.iterateTraces({ model: "gpt-5" })) console.log(trace.id);
 const detail = await api.getTrace(page.traces[0].id); // null when missing
+await api.patchMetadata(detail!.trace.id, { feedback: 1 }); // needs traces:write
 await api.deleteTrace(page.traces[0].id); // needs traces:delete
 ```
 

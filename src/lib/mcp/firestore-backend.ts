@@ -1,6 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type {
   ListTracesQuery,
+  MetadataPatchResult,
   ProjectLike,
   RecordResult,
   TraceBackend,
@@ -11,6 +12,7 @@ import type { ServerEnv } from "@/lib/env/server";
 import type { AuthenticatedKey } from "@/lib/firetrace/api-auth";
 import { ApiError } from "@/lib/firetrace/errors";
 import { ingestTrace } from "@/lib/firetrace/ingest";
+import { normalizeMetadataPatch, patchTraceMetadata } from "@/lib/firetrace/metadata";
 import { normalizeIngestBody } from "@/lib/firetrace/normalize";
 import { ingestRequestJsonSchema } from "@/lib/firetrace/openapi";
 import { deleteTrace, requireProject } from "@/lib/firetrace/projects";
@@ -98,6 +100,18 @@ export class FirestoreBackend implements TraceBackend {
       spanCount: normalized.value.spans.length,
       duplicate: outcome.duplicate,
     };
+  }
+
+  async patchTraceMetadata(
+    traceId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<MetadataPatchResult> {
+    const normalized = normalizeMetadataPatch({ metadata });
+    if (!normalized.ok) {
+      throw new ApiError(400, normalized.error.code, normalized.error.message);
+    }
+    const outcome = await patchTraceMetadata(this.db, this.projectId, traceId, normalized.value);
+    return { traceId, metadata: outcome.metadata, changed: outcome.changed };
   }
 
   async deleteTrace(traceId: string): Promise<void> {

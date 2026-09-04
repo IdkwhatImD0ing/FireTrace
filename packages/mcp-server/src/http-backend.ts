@@ -1,6 +1,7 @@
 import {
   BackendError,
   type ListTracesQuery,
+  type MetadataPatchResult,
   type ProjectLike,
   type RecordResult,
   type TraceBackend,
@@ -89,6 +90,13 @@ export class HttpBackend implements TraceBackend {
 
   recordTrace(body: unknown): Promise<RecordResult> {
     return this.request<RecordResult>("POST", "/api/v1/traces", body);
+  }
+
+  patchTraceMetadata(
+    traceId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<MetadataPatchResult> {
+    return this.request<MetadataPatchResult>("PATCH", `/api/v1/traces/${traceId}`, { metadata });
   }
 
   async deleteTrace(traceId: string): Promise<void> {

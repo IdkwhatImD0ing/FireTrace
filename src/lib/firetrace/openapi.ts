@@ -179,6 +179,33 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
       schemas: {
         Error: errorSchema,
         IngestRequest: ingestRequestJsonSchema(),
+        MetadataPatch: {
+          type: "object",
+          required: ["metadata"],
+          additionalProperties: false,
+          properties: {
+            metadata: {
+              type: "object",
+              additionalProperties: true,
+              description:
+                "Keys to merge into the trace's metadata. Shallow: a key here replaces that top-level key outright; keys not mentioned are left alone.",
+            },
+          },
+        },
+        MetadataPatchResult: {
+          type: "object",
+          required: ["ok", "traceId", "metadata", "changed", "requestId"],
+          properties: {
+            ok: { type: "boolean" },
+            traceId: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
+            changed: {
+              type: "boolean",
+              description: "False when the merge matched what was already stored; nothing written",
+            },
+            requestId: { type: "string" },
+          },
+        },
         TraceSummary: traceSummarySchema,
         Span: spanSchema,
         TracePage: {
@@ -363,6 +390,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
                               input: {},
                               output: {},
                               metadata: { type: "object" },
+                              metadataUpdatedAt: { type: ["string", "null"], format: "date-time" },
                               bodyHash: { type: "string" },
                             },
                           },
@@ -376,6 +404,45 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
             },
             "404": {
               description: "No such trace in this project",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+            },
+            ...errorResponses,
+          },
+        },
+        patch: {
+          operationId: "patchTraceMetadata",
+          summary: "Merge keys into a stored trace's metadata",
+          description:
+            "Requires `traces:write`. The only mutable part of a stored trace: everything it was ingested with stays write-once. The merge is shallow, and `bodyHash` is deliberately not recomputed so re-sending the original trace is still a duplicate rather than a `409`. Metadata is not indexed, so it cannot be filtered, ordered, or aggregated by.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/MetadataPatch" } },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Merged metadata (written, or unchanged when it matched)",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/MetadataPatchResult" },
+                },
+              },
+            },
+            "400": {
+              description: "Invalid JSON, a field other than metadata, or a key Firestore refuses",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+            },
+            "404": {
+              description: "No such trace in this project",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+            },
+            "413": {
+              description: "Request over 2 MiB, or the merged document over the per-document limit",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+            },
+            "429": {
+              description: "Firestore quota exhausted; nothing written",
               content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
             },
             ...errorResponses,

@@ -60,7 +60,18 @@ export interface TraceDetail extends TraceSummary {
   input?: JsonValue;
   output?: JsonValue;
   metadata: JsonObject;
+  /** Set the first time metadata was patched after ingestion; null if never. */
+  metadataUpdatedAt: string | null;
+  /** Hash of the body as ingested. Patching metadata deliberately leaves it alone. */
   bodyHash: string;
+}
+
+export interface MetadataPatchResult {
+  traceId: string;
+  /** The full merged metadata, so a client that lost a race sees what won. */
+  metadata: JsonObject;
+  /** False when the merge matched what was stored; nothing was written. */
+  changed: boolean;
 }
 
 export interface SpanDetail {
@@ -170,19 +181,41 @@ export class FireTraceApi {
     }
   }
 
+  /**
+   * Shallow-merge keys into a stored trace's metadata (scope traces:write).
+   * The one mutable part of a trace: use it for judgements that only exist
+   * after the run, such as a thumbs rating or a reviewer's verdict.
+   *
+   * A patched key replaces that top-level key outright, and concurrent writers
+   * on the same key are last-writer-wins. Metadata is not indexed, so it
+   * cannot be filtered or aggregated server-side.
+   */
+  patchMetadata(traceId: string, metadata: JsonObject): Promise<MetadataPatchResult> {
+    return this.request<MetadataPatchResult>(
+      "PATCH",
+      `/api/v1/traces/${encodeURIComponent(traceId)}`,
+      { metadata },
+    );
+  }
+
   /** Permanently delete one trace and its spans (scope traces:delete). */
   async deleteTrace(traceId: string): Promise<void> {
     await this.request("DELETE", `/api/v1/traces/${encodeURIComponent(traceId)}`);
   }
 
-  private async request<T>(method: string, path: string): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.base}${path}`, {
         method,
-        headers: { Authorization: `Bearer ${this.apiKey}`, Accept: "application/json" },
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          Accept: "application/json",
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
     } catch (err) {
