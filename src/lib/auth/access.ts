@@ -3,10 +3,11 @@ import { cache } from "react";
 import type { Owner } from "@/lib/auth/session";
 import { serverEnv } from "@/lib/env/server";
 import { ApiError } from "@/lib/firetrace/errors";
-import { isProjectId } from "@/lib/firetrace/ids";
+import { isProjectId, isTraceId } from "@/lib/firetrace/ids";
 import { getProject, listProjects, listProjectsForEmail } from "@/lib/firetrace/projects";
+import { getTrace } from "@/lib/firetrace/queries";
 import { effectivePlan } from "@/lib/firetrace/trial";
-import type { Project } from "@/lib/firetrace/types";
+import type { Project, TraceDetail } from "@/lib/firetrace/types";
 
 /**
  * Project visibility. Allowlisted owners see every project in the deployment.
@@ -53,6 +54,24 @@ async function loadAccessibleProject(
  * per request so the project layout and its page share one document read.
  */
 export const getAccessibleProject = cache(loadAccessibleProject);
+
+/**
+ * Trace the caller may open, or null when the trace or its project is missing
+ * or inaccessible (indistinguishable, like projects). Memoized per request so
+ * the trace layout's existence check and the page share one document read.
+ */
+export const getAccessibleTrace = cache(
+  async (
+    db: Firestore,
+    owner: Owner,
+    projectId: string,
+    traceId: string,
+  ): Promise<TraceDetail | null> => {
+    if (!isTraceId(traceId)) return null;
+    const project = await getAccessibleProject(db, owner, projectId);
+    return project ? getTrace(db, projectId, traceId) : null;
+  },
+);
 
 /**
  * Project the caller may open, or a 404 ApiError. Not memoized: server actions
