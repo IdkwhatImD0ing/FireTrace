@@ -16,6 +16,7 @@ Concretely, the codebase has no `expireAt` field, no Firestore TTL policy, no cl
 
 - Multiple **projects** as trace namespaces inside one deployment.
 - Per-project **API keys** (`ft_live_…`) that are shown once, stored only as an HMAC digest, carry **scopes** (`traces:write`, `traces:read`, `traces:delete`) and an optional expiry, and can be revoked or rotated.
+- **Environments** that never mix: each key carries an environment (`production`, `preview`, `development`, or any slug) that the server stamps onto every trace the key records, so a preview deployment cannot write into production's numbers because it does not hold production's key. Filter the API by `environment`, and switch the whole dashboard (lists, charts, summary cards, scores) with one selector. Keys and traces from before this feature are "unassigned", never silently relabelled; a script classifies history by key, tag, or time ([docs/api.md](docs/api.md#environments)).
 - A language-neutral **REST API** ([docs/api.md](docs/api.md), OpenAPI at `/api/v1/openapi.json`): `POST /api/v1/traces` records one complete trace with idempotent retries; `POST /api/v1/traces/{id}/scores` attaches a rating, verdict, or eval result; `PATCH /api/v1/traces/{id}` merges free-form keys into that trace's `metadata`; `GET` routes list and read traces, scores, and the project; `DELETE` removes a trace or a score explicitly.
 - **Scores**: typed judgements (numeric, categorical, or boolean, with a comment and a source) attached to a trace after the run. They are indexed, listable per trace or across the project, and summarized on every trace as the newest score per name.
 - **Evaluators** (LLM-as-a-judge, [docs/evaluators.md](docs/evaluators.md)): prompt templates with `{{input}}`/`{{output}}` variables, answered by any OpenAI-compatible endpoint you configure, tested on a trace before saving, and run on one trace or over the filtered list. Verdicts land as scores with the judge's reasoning; every run is logged with its token usage.
@@ -57,16 +58,17 @@ One FireTrace deployment connects to one Firebase project. Inside it, `projects/
 
 Firestore collections:
 
-| Path                                            | Contents                                                                                                                                                                                       |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                                                                |
-| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                                                                          |
-| `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, metadataUpdatedAt, usage, cost, counts, bodyHash, estimatedBytes)                             |
-| `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                                                                  |
-| `projects/{projectId}/scores/{scoreId}`         | one document per score (traceId, spanId, name, dataType, value, comment, source, evaluatorId, runId, createdAt); the trace carries the newest score per name                                   |
-| `projects/{projectId}/evaluators/{evaluatorId}` | an LLM-as-a-judge definition (name, description, promptTemplate, outputType, model)                                                                                                            |
-| `projects/{projectId}/evalRuns/{runId}`         | one document per judge call (evaluatorId, evaluatorName, traceId, trigger, status, model, usage, durationMs, error, scoreId)                                                                   |
-| `projects/{projectId}/stats/{YYYY-MM-DD}`       | per-day rollup for the dashboard (counts, errors, tokens, cost, hourly buckets, per-model and per-name totals with latency histograms, per-score sums); rebuilt by `scripts/backfill-stats.ts` |
+| Path                                            | Contents                                                                                                                                                                                                                    |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                                                                                             |
+| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, environment, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                                                                                          |
+| `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, metadataUpdatedAt, usage, cost, counts, bodyHash, estimatedBytes) plus environment and keyId copied from the recording key |
+| `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                                                                                               |
+| `projects/{projectId}/scores/{scoreId}`         | one document per score (traceId, spanId, name, dataType, value, comment, source, evaluatorId, runId, createdAt); the trace carries the newest score per name                                                                |
+| `projects/{projectId}/evaluators/{evaluatorId}` | an LLM-as-a-judge definition (name, description, promptTemplate, outputType, model)                                                                                                                                         |
+| `projects/{projectId}/evalRuns/{runId}`         | one document per judge call (evaluatorId, evaluatorName, traceId, trigger, status, model, usage, durationMs, error, scoreId)                                                                                                |
+| `projects/{projectId}/stats/{YYYY-MM-DD}`       | per-day rollup for the dashboard (counts, errors, tokens, cost, hourly buckets, per-model and per-name totals with latency histograms, per-score sums); rebuilt by `scripts/backfill-stats.ts`                              |
+| `projects/{projectId}/statsByEnv/{env}:{day}`   | the same rollup per environment (`_unassigned` for traces without one), so every dashboard number can follow the environment selector; rebuilt by the same script                                                           |
 
 Composite indexes and the single-field exemptions for large payload fields live in `firestore.indexes.json`.
 
@@ -304,7 +306,7 @@ By default only the emails in `DASHBOARD_ALLOWED_EMAILS` can sign in, and every 
 
 ## Send traces
 
-Create a project in the dashboard, open **Settings**, create an API key, and copy it when it is shown. The project page also has a setup panel with the endpoint, a redacted key reference, and a one-click prompt that has a coding agent instrument your application for you; the snippets below are the manual route.
+Create a project in the dashboard, open **Settings**, create an API key, and copy it when it is shown. Create one key per environment (the key screen offers production, preview and development as one-click presets) and set a different `FIRETRACE_API_KEY` in each of your host's environment scopes: the server stamps the key's environment onto every trace, so your application never needs to know which environment it runs in. The project page also has a setup panel with the endpoint, a redacted key reference, and a one-click prompt that has a coding agent instrument your application for you; the snippets below are the manual route.
 
 ### TypeScript SDK
 
@@ -417,6 +419,8 @@ firestore.indexes.json        composite indexes and payload-field exemptions
 | `pnpm firebase:deploy`  | Deploy Firestore rules and indexes and the Auth provider config from `firebase.json`                           |
 | `pnpm sdk:build`        | Compile `packages/sdk-js` to `dist/`; `pnpm sdk:typecheck` to check only                                       |
 | `pnpm mcp:stdio`        | Run the stdio MCP bridge from source (`FIRETRACE_ENDPOINT`, `FIRETRACE_API_KEY`); `pnpm mcp:build` compiles it |
+
+Two maintenance scripts run with `pnpm exec tsx` against the Firebase project in your environment, dry run unless `--apply` is given: `scripts/backfill-stats.ts --project <id>` rebuilds the dashboard rollups (all-environment and per-environment) from stored traces and scores, and `scripts/backfill-environment.ts --project <id>` marks traces recorded before environments existed as unassigned or, with `--environment <slug>` and `--key`, `--tag`, `--from`/`--to` selectors, classifies that history ([docs/api.md](docs/api.md#assigning-environments-to-history)).
 
 ## Current limitations
 

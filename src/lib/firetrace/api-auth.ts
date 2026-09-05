@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { parseApiKey, verifyApiKey } from "./api-keys";
+import { environmentFromDocument } from "./environment";
 import { ApiError } from "./errors";
 import { scopesFromDocument, type KeyScope } from "./scopes";
 
@@ -11,6 +12,8 @@ export interface AuthenticatedKey {
   lastUsedAt: Date | null;
   /** Plan of the project when the key was issued; trial keys die with trial mode. */
   plan: "owner" | "trial";
+  /** Stamped onto every trace this key ingests; null = unassigned. */
+  environment: string | null;
 }
 
 /** How often `lastUsedAt` is refreshed for a busy key (avoids a write per request). */
@@ -65,6 +68,7 @@ export async function authenticateApiKey(
     expiresAt: data.expiresAt instanceof Timestamp ? data.expiresAt.toDate() : null,
     lastUsedAt: data.lastUsedAt instanceof Timestamp ? data.lastUsedAt.toDate() : null,
     plan: data.plan === "trial" ? "trial" : "owner",
+    environment: environmentFromDocument(data.environment),
   };
 }
 

@@ -4,8 +4,14 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Dialog } from "@/components/ui/Dialog";
-import { createApiKeyAction, revokeApiKeyAction, rotateApiKeyAction } from "@/lib/actions";
+import {
+  createApiKeyAction,
+  revokeApiKeyAction,
+  rotateApiKeyAction,
+  setApiKeyEnvironmentAction,
+} from "@/lib/actions";
 import { redactedKeyReference } from "@/lib/firetrace/api-key-format";
+import { ENVIRONMENT_PRESETS } from "@/lib/firetrace/environment";
 import {
   DEFAULT_KEY_SCOPES,
   KEY_SCOPES,
@@ -39,16 +45,62 @@ function expiryLabel(key: ApiKeySummary, now: number): { text: string; tone: str
   };
 }
 
+/** One-click presets plus any slug; blank means unassigned. Case is folded as you type. */
+function EnvironmentField({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Environment presets">
+        {ENVIRONMENT_PRESETS.map((preset) => (
+          <button
+            key={preset}
+            type="button"
+            className={`btn btn-sm ${value === preset ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => onChange(preset)}
+          >
+            {preset}
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`btn btn-sm ${value === "" ? "btn-primary" : "btn-ghost"}`}
+          onClick={() => onChange("")}
+        >
+          unassigned
+        </button>
+      </div>
+      <input
+        id={id}
+        className="input mt-2 font-mono text-xs"
+        value={value}
+        onChange={(e) => onChange(e.target.value.toLowerCase())}
+        placeholder="or any slug: staging, qa, local…"
+        maxLength={32}
+        spellCheck={false}
+      />
+    </div>
+  );
+}
+
 export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: ApiKeySummary[] }) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<KeyScope[]>(DEFAULT_KEY_SCOPES);
   const [expiry, setExpiry] = useState("never");
+  const [environment, setEnvironment] = useState("");
   const [confirm, setConfirm] = useState<{
     action: "revoke" | "rotate";
     key: ApiKeySummary;
   } | null>(null);
+  const [envEdit, setEnvEdit] = useState<{ key: ApiKeySummary; value: string } | null>(null);
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -65,13 +117,30 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
     setLabel("");
     setScopes(DEFAULT_KEY_SCOPES);
     setExpiry("never");
+    setEnvironment("");
+  }
+
+  /** Open the create dialog, optionally prefilled for one environment. */
+  function openCreate(preset?: string) {
+    resetForm();
+    if (preset) {
+      setLabel(preset);
+      setEnvironment(preset);
+    }
+    setError(null);
+    setCreateOpen(true);
   }
 
   function create(e: FormEvent) {
     e.preventDefault();
     setError(null);
     startTransition(async () => {
-      const result = await createApiKeyAction(projectId, { label, scopes, expiry });
+      const result = await createApiKeyAction(projectId, {
+        label,
+        scopes,
+        expiry,
+        environment: environment || null,
+      });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -110,8 +179,24 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
     });
   }
 
+  function saveEnvironment() {
+    if (!envEdit) return;
+    const { key, value } = envEdit;
+    setError(null);
+    startTransition(async () => {
+      const result = await setApiKeyEnvironmentAction(projectId, key.id, value || null);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setEnvEdit(null);
+      router.refresh();
+    });
+  }
+
   const active = keys.filter((k) => !k.revokedAt);
   const revoked = keys.filter((k) => k.revokedAt);
+  const noEnvironments = active.every((k) => k.environment === null);
 
   return (
     <section className="card p-5" aria-labelledby="keys-title">
@@ -122,13 +207,40 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
           </h2>
           <p className="mt-1 text-sm text-ink-2">
             Keys authenticate the REST API and the MCP endpoint for this project only. Each key
-            carries the scopes you pick here; only a hash is stored and the plaintext is shown once.
+            carries the scopes you pick here and the environment its traces land in; only a hash is
+            stored and the plaintext is shown once.
           </p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setCreateOpen(true)}>
+        <button type="button" className="btn btn-primary" onClick={() => openCreate()}>
           Create key
         </button>
       </div>
+
+      {noEnvironments && (
+        <div className="mt-4 rounded-md border border-line-2 bg-bg-2 p-4">
+          <p className="mono-label">One key per environment</p>
+          <p className="mt-1 max-w-3xl text-sm text-ink-2">
+            A trace takes the environment of the key that sends it, so production, preview and local
+            traffic only stay apart when each deployment holds its own key. Create one per
+            environment and set a different{" "}
+            <code className="font-mono text-ink">FIRETRACE_API_KEY</code> in each of your
+            host&apos;s environment scopes. Keys without an environment record traces as
+            &ldquo;unassigned&rdquo;.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {ENVIRONMENT_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => openCreate(preset)}
+              >
+                Create {preset} key
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {reveal && (
         <div role="status" className="mt-4 rounded-md border border-ember/60 bg-ember-dim p-4">
@@ -162,12 +274,13 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
       )}
 
       <div className="mt-4 overflow-x-auto">
-        <table className="table-dense w-full min-w-[820px] border-collapse">
+        <table className="table-dense w-full min-w-[960px] border-collapse">
           <thead>
             <tr>
               <th scope="col">Label</th>
               <th scope="col">Key</th>
               <th scope="col">Scopes</th>
+              <th scope="col">Environment</th>
               <th scope="col">Created (UTC)</th>
               <th scope="col">Expires (UTC)</th>
               <th scope="col">Last used</th>
@@ -180,7 +293,7 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
           <tbody>
             {keys.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-6 text-center text-ink-3">
+                <td colSpan={9} className="py-6 text-center text-ink-3">
                   No keys yet. Create one to start sending traces.
                 </td>
               </tr>
@@ -204,6 +317,25 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
                           {SCOPE_SHORT[s]}
                         </span>
                       ))}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="inline-flex items-center gap-2">
+                      {k.environment ? (
+                        <span className="chip">{k.environment}</span>
+                      ) : (
+                        <span className="font-mono text-[11px] text-ink-3">unassigned</span>
+                      )}
+                      {!k.revokedAt && (
+                        <button
+                          type="button"
+                          className="font-mono text-[10px] uppercase tracking-wider text-ink-3 hover:text-ink"
+                          onClick={() => setEnvEdit({ key: k, value: k.environment ?? "" })}
+                          aria-label={`Change environment of ${k.label}`}
+                        >
+                          change
+                        </button>
+                      )}
                     </span>
                   </td>
                   <td className="font-mono text-[11px] text-ink-2">
@@ -296,6 +428,23 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
             </div>
           </fieldset>
 
+          <div>
+            <label htmlFor="create-key-environment" className="mono-label block">
+              Environment
+            </label>
+            <p className="mt-1 text-xs text-ink-3">
+              Stamped by the server on every trace this key records; the trace body cannot set it.
+              Use one key per environment.
+            </p>
+            <div className="mt-2">
+              <EnvironmentField
+                id="create-key-environment"
+                value={environment}
+                onChange={setEnvironment}
+              />
+            </div>
+          </div>
+
           <label className="block">
             <span className="mono-label block">Expires</span>
             <select
@@ -331,6 +480,43 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
       </Dialog>
 
       <Dialog
+        open={envEdit !== null}
+        onClose={() => setEnvEdit(null)}
+        title="Set the key's environment"
+        labelledBy="env-key-title"
+      >
+        <p className="text-sm text-ink-2">
+          Traces that &ldquo;{envEdit?.key.label}&rdquo; records from now on carry this environment.
+          Traces it already recorded keep the one they were stored with.
+        </p>
+        <div className="mt-4">
+          <EnvironmentField
+            id="edit-key-environment"
+            value={envEdit?.value ?? ""}
+            onChange={(value) => setEnvEdit((current) => current && { ...current, value })}
+          />
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setEnvEdit(null)}
+            disabled={pending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={saveEnvironment}
+            disabled={pending}
+          >
+            {pending ? "Saving…" : "Save environment"}
+          </button>
+        </div>
+      </Dialog>
+
+      <Dialog
         open={confirm !== null}
         onClose={() => setConfirm(null)}
         title={confirm?.action === "rotate" ? "Rotate this key?" : "Revoke this key?"}
@@ -338,8 +524,8 @@ export function ApiKeysPanel({ projectId, keys }: { projectId: string; keys: Api
       >
         <p className="text-sm text-ink-2">
           {confirm?.action === "rotate"
-            ? `A new key labeled "${confirm.key.label}" with the same scopes and expiry will be issued and the current one revoked immediately. Update your application with the new key.`
-            : `Requests using "${confirm?.key.label}" will fail immediately. This cannot be undone.`}
+            ? `A new key labeled "${confirm.key.label}" with the same scopes, environment and expiry will be issued and the current one revoked immediately. Update your application with the new key.`
+            : `Requests using "${confirm?.key.label}" will fail immediately. Traces it recorded stay, with their environment. This cannot be undone.`}
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button

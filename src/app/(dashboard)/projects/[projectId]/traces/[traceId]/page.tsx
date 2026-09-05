@@ -9,6 +9,7 @@ import { ScoresPanel } from "@/components/trace/ScoresPanel";
 import { TraceExplorer } from "@/components/trace/TraceExplorer";
 import { TraceNav } from "@/components/trace/TraceNav";
 import { serverEnv } from "@/lib/env/server";
+import { getEnvironmentView } from "@/lib/environment-selection";
 import { listEvaluators } from "@/lib/eval/evaluators";
 import { adminDb } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/firetrace/errors";
@@ -81,22 +82,24 @@ export default async function TracePage({
   if (!isProjectId(projectId) || !isTraceId(traceId)) notFound();
   // The list view this trace was opened from, so newer/older follow the same order.
   const sp = await searchParams;
-  const filters = parseTraceFilters(sp);
   const sort = parseTraceSort(sp.sort);
-  const listQuery = traceListQuery(filters, sort);
+  const listQuery = traceListQuery(parseTraceFilters(sp), sort);
   const db = adminDb();
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
   const isOwner = owner.role === "owner";
   // Everything below needs only the authorized project, so it is one round trip.
   // The trace read is shared with the layout, which already 404s when it is missing.
-  const [trace, spans, scores, evaluators] = await Promise.all([
+  const [trace, spans, scores, evaluators, view] = await Promise.all([
     getAccessibleTrace(db, owner, projectId, traceId),
     listSpans(db, projectId, traceId),
     listScoresForTrace(db, projectId, traceId),
     isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
+    getEnvironmentView(db, projectId),
   ]);
   if (!trace) notFound();
+  // Neighbours stay inside the selected environment, like the list did.
+  const filters = { ...parseTraceFilters(sp), environment: view.filter };
   const evalConfigured = serverEnv().eval !== null;
 
   return (
@@ -127,11 +130,20 @@ export default async function TracePage({
         </div>
       </div>
 
-      <dl className="card grid grid-cols-2 gap-x-6 gap-y-3 px-5 py-4 sm:grid-cols-4 xl:grid-cols-8">
+      <dl className="card grid grid-cols-2 gap-x-6 gap-y-3 px-5 py-4 sm:grid-cols-4 xl:grid-cols-9">
         <div>
           <dt className="mono-label">status</dt>
           <dd className="mt-0.5">
             <StatusBadge status={trace.status} />
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="mono-label">environment</dt>
+          <dd
+            className="mt-0.5 truncate font-mono text-sm text-ink"
+            title="Set by the key that recorded this trace"
+          >
+            {trace.environment ?? <span className="text-ink-3">unassigned</span>}
           </dd>
         </div>
         <div>

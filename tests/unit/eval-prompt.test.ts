@@ -34,6 +34,7 @@ const trace: TraceDetail = {
   estimatedBytes: 100,
   ingestedAt: null,
   scores: {},
+  environment: null,
   schemaVersion: 1,
   bodyHash: "",
   input: "What is the refund policy?",

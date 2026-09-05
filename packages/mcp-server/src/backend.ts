@@ -13,9 +13,11 @@ export interface ListTracesQuery {
   name?: string;
   /** One tag the trace must carry. */
   tag?: string;
+  /** Environment stamped from the ingesting key, or `unassigned` for traces without one. */
+  environment?: string;
   sessionId?: string;
   userId?: string;
-  /** newest (default), slowest or costliest; the latter two only with status/model/name/tag. */
+  /** newest (default), slowest or costliest; the latter two only with status/model/name/tag/environment. */
   sort?: "newest" | "slowest" | "costliest";
   /** Inclusive ISO-8601 lower bound on startedAt. */
   from?: string;
@@ -36,6 +38,8 @@ export interface TraceSummaryLike {
   id: string;
   name: string;
   status: string;
+  /** Copied from the ingesting key; null = unassigned. */
+  environment?: string | null;
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -114,6 +118,8 @@ export interface ListScoresQuery {
   traceId?: string;
   /** Only scores with this name. */
   name?: string;
+  /** Only scores whose trace is in this environment (`unassigned` for none); ignored with traceId. */
+  environment?: string;
   limit?: number;
   /** nextCursor from a previous page. */
   cursor?: string;

@@ -19,7 +19,9 @@ import {
   type RunOutcome,
 } from "@/lib/eval/run";
 import { EVAL_LIMITS, normalizeEvaluatorInput, type Evaluator } from "@/lib/eval/schema";
+import { getEnvironmentView } from "@/lib/environment-selection";
 import { adminDb } from "@/lib/firebase/admin";
+import { normalizeEnvironment } from "@/lib/firetrace/environment";
 import { ApiError } from "@/lib/firetrace/errors";
 import { isTraceId } from "@/lib/firetrace/ids";
 import { listTraces, parseTraceFilters } from "@/lib/firetrace/queries";
@@ -30,6 +32,7 @@ import {
   deleteTrace,
   revokeApiKey,
   rotateApiKey,
+  setApiKeyEnvironment,
   updateProject,
 } from "@/lib/firetrace/projects";
 import { expiryFromPreset, normalizeScopes } from "@/lib/firetrace/scopes";
@@ -110,7 +113,7 @@ export async function deleteProjectAction(projectId: string, confirmName: string
 
 export async function createApiKeyAction(
   projectId: string,
-  input: { label: string; scopes: string[]; expiry?: string },
+  input: { label: string; scopes: string[]; expiry?: string; environment?: string | null },
 ): Promise<ActionResult<{ key: ApiKeySummary; plaintext: string }>> {
   return run("createApiKey", async () => {
     const owner = await requireOwner();
@@ -124,12 +127,34 @@ export async function createApiKeyAction(
       pepper: env.keyPepper,
       scopes: normalizeScopes(input.scopes),
       expiresAt: expiryFromPreset(input.expiry),
+      environment: normalizeEnvironment(input.environment),
       plan,
       maxKeys: plan === "trial" ? TRIAL_MAX_KEYS : undefined,
     });
     revalidatePath(`/projects/${projectId}/settings`);
     revalidatePath(`/projects/${projectId}`);
     return result;
+  });
+}
+
+/** Change the environment a key stamps from now on; traces it already sent keep theirs. */
+export async function setApiKeyEnvironmentAction(
+  projectId: string,
+  keyId: string,
+  environment: string | null,
+): Promise<ActionResult<ApiKeySummary>> {
+  return run("setApiKeyEnvironment", async () => {
+    const owner = await requireOwner();
+    await requireAccessibleProject(adminDb(), owner, projectId);
+    const key = await setApiKeyEnvironment(
+      adminDb(),
+      projectId,
+      keyId,
+      normalizeEnvironment(environment),
+    );
+    revalidatePath(`/projects/${projectId}/settings`);
+    revalidatePath(`/projects/${projectId}`);
+    return key;
   });
 }
 
@@ -320,7 +345,11 @@ export async function runEvaluatorAction(
   });
 }
 
-/** Run over the traces matching the trace list's current filters (newest first, capped). */
+/**
+ * Run over the traces matching the trace list's current filters (newest
+ * first, capped). The environment comes from the selector's cookie, exactly
+ * as the list the user is looking at.
+ */
 export async function runEvaluatorBulkAction(
   projectId: string,
   evaluatorId: string,
@@ -330,10 +359,16 @@ export async function runEvaluatorBulkAction(
   return run("runEvaluatorBulk", async () => {
     const db = await requireEvaluatorAccess(projectId);
     const cfg = requireEvalConfig();
-    const evaluator = await requireEvaluator(db, projectId, evaluatorId);
-    const page = await listTraces(db, projectId, parseTraceFilters(filters), {
-      limit: EVAL_LIMITS.maxBulkTraces,
-    });
+    const [evaluator, view] = await Promise.all([
+      requireEvaluator(db, projectId, evaluatorId),
+      getEnvironmentView(db, projectId),
+    ]);
+    const page = await listTraces(
+      db,
+      projectId,
+      { ...parseTraceFilters(filters), environment: view.filter },
+      { limit: EVAL_LIMITS.maxBulkTraces },
+    );
     const outcome = await runEvaluatorBulk(
       db,
       cfg,

@@ -8,6 +8,7 @@ import {
 } from "firebase-admin/firestore";
 import { parseUtcDateParam, trimmedParam } from "@/lib/search-params";
 import { toScore } from "./convert";
+import { environmentFromDocument, parseEnvironmentFilter, storedEnvironment } from "./environment";
 import { ApiError, rethrowQuotaExhausted } from "./errors";
 import { isScoreId, newScoreId } from "./ids";
 import { byteLength } from "./normalize";
@@ -22,10 +23,12 @@ import {
 } from "./schema";
 import {
   chooseKey,
+  envStatsDocId,
   existingKey,
   scoreStatsDeltas,
   STATS_CAPS,
   STATS_COLLECTION,
+  STATS_ENV_COLLECTION,
   statsDayId,
   statsIncrements,
   type Delta,
@@ -50,6 +53,15 @@ import type { Score, ScoreFilters, ScorePage, ScoreSummary } from "./types";
 export const SCORES_COLLECTION = "scores";
 export const DEFAULT_SCORE_PAGE_SIZE = 50;
 export const MAX_SCORE_PAGE_SIZE = 500;
+/**
+ * The environment filter is resolved through each score's trace (one read per
+ * distinct trace), so one request examines at most this many scores before
+ * returning what it found with a cursor to continue from.
+ */
+export const MAX_SCORE_SCAN = 1000;
+
+/** Query parameters `GET /api/v1/scores` understands; anything else is a 400 there. */
+export const SCORE_LIST_PARAMS = ["name", "environment", "from", "to", "limit", "after"] as const;
 
 export type NormalizeScoreResult =
   | { ok: true; value: ScoreInput }
@@ -64,16 +76,42 @@ export function normalizeScoreInput(body: unknown): NormalizeScoreResult {
   return { ok: true, value: parsed.data };
 }
 
-/** Parse URL search params into validated filters; unknown values are ignored. */
+/**
+ * Parse URL search params into validated filters. Lenient by default (the
+ * dashboard drops an unknown value); `strict` makes an invalid value a 400 for the API.
+ */
 export function parseScoreFilters(
   params: Record<string, string | string[] | undefined>,
+  options: { strict?: boolean } = {},
 ): ScoreFilters {
+  const strict = options.strict === true;
   const first = (key: string) => trimmedParam(params, key, LIMITS.maxIdentifierLength);
   const name = first("name");
+  const validName = name !== undefined && scoreNameSchema.safeParse(name).success;
+  if (strict && name && !validName) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      `Invalid name "${name}". Score names use letters, digits, '_' and '-' (at most ${SCORE_LIMITS.maxNameLength} characters).`,
+    );
+  }
+  const time = (key: "from" | "to") => {
+    const raw = first(key);
+    const parsed = parseUtcDateParam(raw);
+    if (strict && raw && !parsed) {
+      throw new ApiError(
+        400,
+        "invalid_request",
+        `Invalid ${key} "${raw}". Use an ISO 8601 timestamp, e.g. 2026-09-02T19:01:02Z.`,
+      );
+    }
+    return parsed;
+  };
   return {
-    name: name && scoreNameSchema.safeParse(name).success ? name : undefined,
-    from: parseUtcDateParam(first("from")),
-    to: parseUtcDateParam(first("to")),
+    name: validName ? name : undefined,
+    environment: parseEnvironmentFilter(first("environment"), { strict }),
+    from: time("from"),
+    to: time("to"),
   };
 }
 
@@ -103,6 +141,20 @@ function statsDayRef(db: Firestore, projectId: string, createdAt: Timestamp) {
     .doc(projectId)
     .collection(STATS_COLLECTION)
     .doc(statsDayId(createdAt.toDate().toISOString()));
+}
+
+/** The per-environment twin of `statsDayRef`, for the environment of the score's trace. */
+function envStatsDayRef(
+  db: Firestore,
+  projectId: string,
+  environment: string | null,
+  createdAt: Timestamp,
+) {
+  return db
+    .collection("projects")
+    .doc(projectId)
+    .collection(STATS_ENV_COLLECTION)
+    .doc(envStatsDocId(environment, statsDayId(createdAt.toDate().toISOString())));
 }
 
 function scoreLabel(value: unknown): string | null {
@@ -178,6 +230,14 @@ export async function addScore(
           `This trace already has ${SCORE_LIMITS.maxPerTrace} scores, the maximum. Delete one before adding another.`,
         );
       }
+      // Scores roll up under their trace's environment; read that day too before writing.
+      const envDayRef = envStatsDayRef(
+        db,
+        projectId,
+        environmentFromDocument(traceSnap.get("environment")),
+        createdAt,
+      );
+      const envDaySnap = await tx.get(envDayRef);
 
       const doc = {
         traceId,
@@ -205,6 +265,9 @@ export async function addScore(
         updatedAt: FieldValue.serverTimestamp(),
       });
       tx.set(dayRef, statsIncrements(scoreDeltas(daySnap.data() ?? {}, input, "add"), 1), {
+        merge: true,
+      });
+      tx.set(envDayRef, statsIncrements(scoreDeltas(envDaySnap.data() ?? {}, input, "add"), 1), {
         merge: true,
       });
       return toScore(scoreRef.id, doc);
@@ -250,7 +313,40 @@ export function decodeScoreCursor(
   }
 }
 
-/** Newest-first, cursor-paginated scores across the project. */
+/**
+ * Keep the scores whose trace is in `environment` (null = unassigned). The
+ * environment is read from the trace, never stored on the score, so the two
+ * cannot disagree; a score whose trace is gone matches nothing.
+ */
+async function inEnvironment(
+  db: Firestore,
+  projectId: string,
+  docs: FirebaseFirestore.QueryDocumentSnapshot[],
+  environment: string | null,
+): Promise<FirebaseFirestore.QueryDocumentSnapshot[]> {
+  const traces = db.collection("projects").doc(projectId).collection("traces");
+  const traceIds = [
+    ...new Set(docs.map((d) => d.get("traceId")).filter((id) => typeof id === "string")),
+  ] as string[];
+  if (traceIds.length === 0) return [];
+  const snaps = await db.getAll(...traceIds.map((id) => traces.doc(id)), {
+    fieldMask: ["environment"],
+  });
+  const byTrace = new Map(
+    snaps.map((s) => [s.id, s.exists ? environmentFromDocument(s.get("environment")) : undefined]),
+  );
+  return docs.filter((d) => {
+    const env = byTrace.get(d.get("traceId"));
+    return env !== undefined && env === environment;
+  });
+}
+
+/**
+ * Newest-first, cursor-paginated scores across the project. With an
+ * environment filter, scores are scanned in order and kept when their trace
+ * matches, up to MAX_SCORE_SCAN per call; the cursor then points at the last
+ * score examined, so paging continues where the scan stopped.
+ */
 export async function listScores(
   db: Firestore,
   projectId: string,
@@ -267,22 +363,38 @@ export async function listScores(
   if (filters.to) q = q.where("createdAt", "<=", Timestamp.fromDate(new Date(filters.to)));
   q = q.orderBy("createdAt", "desc").orderBy(FieldPath.documentId(), "desc");
 
+  let cursor: { createdAt: Timestamp; scoreId: string } | null = null;
   if (page.after) {
-    const after = decodeScoreCursor(page.after);
-    if (!after) throw new ApiError(400, "invalid_request", "Invalid pagination cursor.");
-    q = q.startAfter(after.createdAt, after.scoreId);
+    cursor = decodeScoreCursor(page.after);
+    if (!cursor) throw new ApiError(400, "invalid_request", "Invalid pagination cursor.");
   }
-  const snap = await q.limit(pageSize + 1).get();
-  let docs = snap.docs;
-  const hasMore = docs.length > pageSize;
-  if (hasMore) docs = docs.slice(0, pageSize);
-  const scores = docs.map((d) => toScore(d.id, d.data()));
-  const last = scores[scores.length - 1];
-  return {
-    scores,
-    pageSize,
-    nextCursor: hasMore && last ? encodeScoreCursor(last.createdAt, last.id) : null,
-  };
+  const wanted =
+    filters.environment === undefined ? undefined : storedEnvironment(filters.environment);
+
+  const scores: Score[] = [];
+  let scanned = 0;
+  for (;;) {
+    const batch = cursor ? q.startAfter(cursor.createdAt, cursor.scoreId) : q;
+    const snap = await batch.limit(pageSize + 1).get();
+    const more = snap.docs.length > pageSize;
+    const chunk = more ? snap.docs.slice(0, pageSize) : snap.docs;
+    const kept = wanted === undefined ? chunk : await inEnvironment(db, projectId, chunk, wanted);
+    for (const d of kept) scores.push(toScore(d.id, d.data()));
+    scanned += chunk.length;
+    const last = chunk[chunk.length - 1];
+    if (scores.length >= pageSize || !more || scanned >= MAX_SCORE_SCAN || !last) {
+      let nextCursor: string | null = null;
+      if (scores.length > pageSize) {
+        scores.length = pageSize;
+        const tail = scores[pageSize - 1];
+        nextCursor = encodeScoreCursor(tail.createdAt, tail.id);
+      } else if (more && last) {
+        nextCursor = encodeScoreCursor(toScore(last.id, last.data()).createdAt, last.id);
+      }
+      return { scores, pageSize, nextCursor };
+    }
+    cursor = { createdAt: last.get("createdAt") as Timestamp, scoreId: last.id };
+  }
 }
 
 /**
@@ -318,7 +430,20 @@ export async function deleteScore(
           : 0;
       const createdAt = scoreSnap.get("createdAt");
       const dayRef = createdAt instanceof Timestamp ? statsDayRef(db, projectId, createdAt) : null;
-      const daySnap = dayRef ? await tx.get(dayRef) : null;
+      // The environment lives on the trace; without the trace (deleted concurrently) that rollup is left alone.
+      const envDayRef =
+        createdAt instanceof Timestamp && traceSnap.exists
+          ? envStatsDayRef(
+              db,
+              projectId,
+              environmentFromDocument(traceSnap.get("environment")),
+              createdAt,
+            )
+          : null;
+      const [daySnap, envDaySnap] = await Promise.all([
+        dayRef ? tx.get(dayRef) : null,
+        envDayRef ? tx.get(envDayRef) : null,
+      ]);
       const remaining = await tx.get(
         scoresCollection(db, projectId)
           .where("traceId", "==", traceId)
@@ -349,12 +474,18 @@ export async function deleteScore(
         });
       }
       const value = scoreSnap.get("value");
-      if (dayRef && daySnap?.exists && isScoreValue(value)) {
-        tx.set(
-          dayRef,
-          statsIncrements(scoreDeltas(daySnap.data() ?? {}, { name, value }, "remove"), -1),
-          { merge: true },
-        );
+      if (isScoreValue(value)) {
+        for (const [ref, snap] of [
+          [dayRef, daySnap],
+          [envDayRef, envDaySnap],
+        ] as const) {
+          if (!ref || !snap?.exists) continue;
+          tx.set(
+            ref,
+            statsIncrements(scoreDeltas(snap.data() ?? {}, { name, value }, "remove"), -1),
+            { merge: true },
+          );
+        }
       }
     });
   } catch (err) {
@@ -366,11 +497,15 @@ function isScoreValue(v: unknown): v is number | string | boolean {
   return typeof v === "number" || typeof v === "string" || typeof v === "boolean";
 }
 
-/** Cascade for a trace deletion: remove every score of the trace and give its rollups back. */
+/**
+ * Cascade for a trace deletion: remove every score of the trace and give its
+ * rollups back, in both the all-environments and the trace's environment days.
+ */
 export async function deleteScoresForTrace(
   db: Firestore,
   projectId: string,
   traceId: string,
+  environment: string | null,
 ): Promise<number> {
   const snap = await scoresCollection(db, projectId).where("traceId", "==", traceId).get();
   if (snap.empty) return 0;
@@ -390,12 +525,17 @@ export async function deleteScoresForTrace(
   const batch = db.batch();
   for (const d of snap.docs) batch.delete(d.ref);
   const days = [...byDay.keys()];
-  const stats = db.collection("projects").doc(projectId).collection(STATS_COLLECTION);
-  const daySnaps = days.length ? await db.getAll(...days.map((day) => stats.doc(day))) : [];
+  const projectRef = db.collection("projects").doc(projectId);
+  const refs = days.flatMap((day) => [
+    projectRef.collection(STATS_COLLECTION).doc(day),
+    projectRef.collection(STATS_ENV_COLLECTION).doc(envStatsDocId(environment, day)),
+  ]);
+  const daySnaps = refs.length ? await db.getAll(...refs) : [];
   for (const daySnap of daySnaps) {
     if (!daySnap.exists) continue;
     const data = daySnap.data() ?? {};
-    const deltas = (byDay.get(daySnap.id) ?? []).flatMap((s) => scoreDeltas(data, s, "remove"));
+    const day = daySnap.id.slice(daySnap.id.indexOf(":") + 1);
+    const deltas = (byDay.get(day) ?? []).flatMap((s) => scoreDeltas(data, s, "remove"));
     batch.set(daySnap.ref, statsIncrements(deltas, -1), { merge: true });
   }
   await batch.commit();

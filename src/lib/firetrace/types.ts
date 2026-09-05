@@ -41,12 +41,16 @@ export interface ApiKeySummary {
   scopes: KeyScope[];
   expiresAt: string | null;
   lastUsedAt: string | null;
+  /** Stamped onto every trace this key ingests; null = unassigned. */
+  environment: string | null;
 }
 
 export interface TraceSummary {
   id: string;
   name: string;
   status: TraceStatus;
+  /** Copied from the ingesting key at ingest time; null for unassigned and pre-environment traces. */
+  environment: string | null;
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -111,6 +115,8 @@ export interface TraceFilters {
   name?: string;
   /** One tag the trace must carry. */
   tag?: string;
+  /** An environment slug, or `unassigned` for traces without one. Composes with every sort. */
+  environment?: string;
   /** ISO timestamps (inclusive). */
   from?: string;
   to?: string;
@@ -118,7 +124,7 @@ export interface TraceFilters {
 
 /**
  * List orderings. `newest` combines with every filter; `slowest` and
- * `costliest` only with status, model, name and tag (see queries.ts).
+ * `costliest` only with status, model, name, tag and environment (see queries.ts).
  */
 export const TRACE_SORTS = ["newest", "slowest", "costliest"] as const;
 export type TraceSort = (typeof TRACE_SORTS)[number];
@@ -163,6 +169,8 @@ export interface Score {
 
 export interface ScoreFilters {
   name?: string;
+  /** Environment of the parent trace (slug or `unassigned`); resolved through the trace, never stored on the score. */
+  environment?: string;
   /** ISO timestamps (inclusive). */
   from?: string;
   to?: string;

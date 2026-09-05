@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { redactedKeyReference } from "@/lib/firetrace/api-key-format";
+import { environmentLabel } from "@/lib/firetrace/environment";
 import type { ApiKeySummary } from "@/lib/firetrace/types";
 
 /**
@@ -20,6 +21,7 @@ export function integrationPrompt({
 FireTrace is a self-hosted tracing service. My deployment:
 - Ingest endpoint (not a secret; keep it in code or config): POST ${appUrl}/api/v1/traces
 - Auth: send "Authorization: Bearer <key>" with the key read from the FIRETRACE_API_KEY environment variable. I have already put the key in .env myself — never hard-code it, never log it, never commit it. Add a FIRETRACE_API_KEY= placeholder to .env.example if this project has one.
+- Environments: the key decides the environment (production, preview, development) and FireTrace stamps it on every trace server-side, so never send an "environment" field. Read FIRETRACE_API_KEY from the host's per-environment secret scope (a different key per environment) rather than sharing one key across environments.
 - Contract: fetch ${appUrl}/api/v1/openapi.json for the machine-readable schema, or read ${appUrl}/docs/ingestion-api. Follow it exactly; the API is strict and rejects unknown fields with 400.
 
 Do this:
@@ -86,8 +88,8 @@ export function SetupPanel({
               <span>
                 {redactedKeyReference(activeKeys[0].id, activeKeys[0].lastFour)}{" "}
                 <span className="text-ink-3">
-                  ({activeKeys[0].label}; scopes {activeKeys[0].scopes.join(", ")}; plaintext shown
-                  once at creation)
+                  ({activeKeys[0].label}; scopes {activeKeys[0].scopes.join(", ")}; environment{" "}
+                  {environmentLabel(activeKeys[0].environment)}; plaintext shown once at creation)
                 </span>
               </span>
             )}

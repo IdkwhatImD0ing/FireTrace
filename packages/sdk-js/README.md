@@ -209,9 +209,10 @@ const api = new FireTraceApi({
 });
 // or, from an existing recording client: client.api()
 
-const key = await api.getKey(); // { keyId, projectId, scopes, expiresAt, lastUsedAt }
+const key = await api.getKey(); // { keyId, projectId, scopes, expiresAt, lastUsedAt, environment }
 const page = await api.listTraces({ status: "error", limit: 20 }); // { traces, nextCursor, prevCursor, pageSize }
 const slow = await api.listTraces({ name: "answer-question", sort: "slowest" }); // also tag, costliest
+const prod = await api.listTraces({ environment: "production", sort: "costliest" }); // or "unassigned"
 for await (const trace of api.iterateTraces({ model: "example-model" })) console.log(trace.id);
 const detail = await api.getTrace(page.traces[0].id); // { trace, spans, scores } or null
 await api.addScore(page.traces[0].id, { name: "helpful", dataType: "boolean", value: true }); // requires traces:write

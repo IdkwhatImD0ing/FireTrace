@@ -44,7 +44,7 @@ export function ProjectSidebar({
   ];
 
   return (
-    <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Project navigation">
+    <aside className="lg:sticky lg:top-[7.75rem] lg:self-start" aria-label="Project navigation">
       <Link
         href={base}
         className="hidden truncate font-display text-xl leading-tight text-ink hover:underline lg:block"

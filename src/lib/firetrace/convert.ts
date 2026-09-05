@@ -8,6 +8,7 @@ import type {
   TraceStatus,
   Usage,
 } from "./schema";
+import { environmentFromDocument } from "./environment";
 import { SCORE_DATA_TYPES, SCORE_SOURCES, SPAN_KINDS, STATUSES } from "./schema";
 import { scopesFromDocument } from "./scopes";
 import type {
@@ -135,6 +136,7 @@ export function toApiKeySummary(id: string, d: DocumentData): ApiKeySummary {
     scopes: scopesFromDocument(d.scopes),
     expiresAt: iso(d.expiresAt),
     lastUsedAt: iso(d.lastUsedAt),
+    environment: environmentFromDocument(d.environment),
   };
 }
 
@@ -143,6 +145,7 @@ export function toTraceSummary(id: string, d: DocumentData): TraceSummary {
     id,
     name: str(d.name) ?? "(unnamed)",
     status: enumOf<TraceStatus>(d.status, STATUSES, "unset"),
+    environment: environmentFromDocument(d.environment),
     startedAt: iso(d.startedAt) ?? new Date(0).toISOString(),
     endedAt: iso(d.endedAt) ?? new Date(0).toISOString(),
     durationMs: num(d.durationMs),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ApiError } from "@/lib/firetrace/errors";
 import {
   cursorFor,
   decodeSortCursor,
@@ -7,6 +8,8 @@ import {
   MAX_PAGE_SIZE,
   parseTraceFilters,
   parseTraceSort,
+  TRACE_LIST_PARAMS,
+  traceListQuery,
 } from "@/lib/firetrace/queries";
 import type { TraceSummary } from "@/lib/firetrace/types";
 
@@ -115,6 +118,76 @@ describe("parseTraceFilters", () => {
   it("ignores unrelated params", () => {
     const filters = parseTraceFilters({ after: "cursor", limit: "10", foo: "bar" });
     expect(Object.values(filters).every((v) => v === undefined)).toBe(true);
+  });
+
+  it("parses the environment filter, folding case, and drops an invalid one when lenient", () => {
+    expect(parseTraceFilters({ environment: "Production" }).environment).toBe("production");
+    expect(parseTraceFilters({ environment: "unassigned" }).environment).toBe("unassigned");
+    expect(parseTraceFilters({ environment: "" }).environment).toBeUndefined();
+    expect(parseTraceFilters({ environment: "no spaces allowed" }).environment).toBeUndefined();
+  });
+});
+
+describe("strict parsing for the API", () => {
+  const reject = (params: Record<string, string>) => {
+    try {
+      parseTraceFilters(params, { strict: true });
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      const e = err as ApiError;
+      expect(e.status).toBe(400);
+      expect(e.code).toBe("invalid_request");
+      return e.message;
+    }
+    throw new Error("expected a 400");
+  };
+
+  it("names an unknown status, sort, environment or time bound instead of ignoring it", () => {
+    expect(reject({ status: "failed" })).toContain('"failed"');
+    expect(reject({ status: "OK" })).toContain("ok, error, unset");
+    expect(reject({ environment: "prod env" })).toContain('"prod env"');
+    expect(reject({ from: "yesterday" })).toContain('"yesterday"');
+    expect(reject({ to: "2026-13-45" })).toContain("to");
+    expect(() => parseTraceSort("fastest", { strict: true })).toThrow(ApiError);
+    expect(parseTraceSort("fastest")).toBe("newest");
+    expect(parseTraceSort("", { strict: true })).toBe("newest");
+  });
+
+  it("still accepts every valid value", () => {
+    expect(
+      parseTraceFilters(
+        { status: "error", environment: "Preview", from: "2026-09-01", sort: "slowest" },
+        { strict: true },
+      ),
+    ).toMatchObject({ status: "error", environment: "preview", from: "2026-09-01T00:00:00.000Z" });
+    expect(parseTraceSort("costliest", { strict: true })).toBe("costliest");
+  });
+
+  it("lists every supported list parameter for the unknown-parameter check", () => {
+    expect([...TRACE_LIST_PARAMS]).toEqual([
+      "status",
+      "model",
+      "name",
+      "tag",
+      "environment",
+      "sessionId",
+      "userId",
+      "from",
+      "to",
+      "sort",
+      "limit",
+      "after",
+      "before",
+    ]);
+  });
+});
+
+describe("traceListQuery", () => {
+  it("keeps filters and a non-default sort but never the environment (that lives in the cookie)", () => {
+    expect(traceListQuery({ status: "error", environment: "production" }, "slowest")).toBe(
+      "?status=error&sort=slowest",
+    );
+    expect(traceListQuery({ environment: "unassigned" }, "newest")).toBe("");
   });
 });
 

@@ -11,12 +11,12 @@ import { TraceFilters } from "@/components/traces/TraceFilters";
 import { TraceHistogram } from "@/components/traces/TraceHistogram";
 import { TraceTable } from "@/components/traces/TraceTable";
 import { serverEnv } from "@/lib/env/server";
+import { getEnvironmentView, listProjectApiKeys } from "@/lib/environment-selection";
 import { listEvaluators } from "@/lib/eval/evaluators";
 import { EVAL_LIMITS } from "@/lib/eval/schema";
 import { adminDb } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/firetrace/errors";
 import { isProjectId } from "@/lib/firetrace/ids";
-import { listApiKeys } from "@/lib/firetrace/projects";
 import { effectivePlan, getTrialUsage, trialSubject } from "@/lib/firetrace/trial";
 import {
   DEFAULT_PAGE_SIZE,
@@ -63,7 +63,11 @@ export default async function ProjectTracesPage({
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
 
-  const filters = parseTraceFilters(sp);
+  // URL filters drive the form and the links; the environment comes from the
+  // selector's cookie and is applied to every query on top of them.
+  const view = await getEnvironmentView(db, projectId);
+  const urlFilters = parseTraceFilters(sp);
+  const filters = { ...urlFilters, environment: view.filter };
   const sort = parseTraceSort(sp.sort);
   const after = firstParam(sp.after);
   const before = firstParam(sp.before);
@@ -99,11 +103,11 @@ export default async function ProjectTracesPage({
     effectivePlan(project, env.allowedEmails) === "trial"
       ? getTrialUsage(db, trialSubject(project.ownerEmail ?? project.ownerUid))
       : null,
-    listApiKeys(db, projectId),
+    listProjectApiKeys(db, projectId),
     recentFacets(db, projectId),
     isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
     loadList(),
-    showList ? getProjectStats(db, projectId, "14d") : null,
+    showList ? getProjectStats(db, projectId, "14d", view.filter) : null,
   ]);
 
   return (
@@ -123,6 +127,7 @@ export default async function ProjectTracesPage({
             {project.traceCount.toLocaleString("en-US")} traces ·{" "}
             {project.spanCount.toLocaleString("en-US")} spans · est.{" "}
             {formatBytes(project.estimatedBytes)}
+            {view.filter && " · these counts cover every environment"}
           </p>
         </div>
       </div>
@@ -149,10 +154,10 @@ export default async function ProjectTracesPage({
         </>
       ) : (
         <>
-          <TraceFilters projectId={projectId} filters={filters} facets={facets} sort={sort} />
+          <TraceFilters projectId={projectId} filters={urlFilters} facets={facets} sort={sort} />
           {stats && <TraceHistogram projectId={projectId} stats={stats} />}
           {(filters.sessionId || filters.userId) && page.traces.length > 0 && (
-            <SessionSummary filters={filters} traces={page.traces} />
+            <SessionSummary filters={urlFilters} traces={page.traces} />
           )}
           {isOwner && evaluators.length > 0 && page.traces.length > 0 && (
             <RunEvaluatorBulk
@@ -166,7 +171,10 @@ export default async function ProjectTracesPage({
           )}
           {page.traces.length === 0 ? (
             <p className="card px-5 py-8 text-center text-sm text-ink-2">
-              {listError ?? "No traces match these filters."}
+              {listError ??
+                (view.filter
+                  ? `No ${view.selection} traces match these filters.`
+                  : "No traces match these filters.")}
             </p>
           ) : (
             <TraceTable projectId={projectId} traces={page.traces} listQuery={listQuery} />

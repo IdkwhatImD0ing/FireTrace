@@ -101,6 +101,22 @@ export async function readJsonBody(request: NextRequest): Promise<unknown> {
   }
 }
 
+/**
+ * 400 for any query parameter outside `known`, naming it. A misspelled or
+ * unsupported filter must never come back as a complete, unfiltered list.
+ */
+export function requireKnownParams(sp: URLSearchParams, known: readonly string[]): void {
+  for (const key of new Set(sp.keys())) {
+    if (!known.includes(key)) {
+      throw new ApiError(
+        400,
+        "invalid_request",
+        `Unknown query parameter "${key}". Supported parameters: ${known.join(", ")}.`,
+      );
+    }
+  }
+}
+
 /** Parse a positive integer query value with bounds. */
 export function intParam(value: string | null, fallback: number, min: number, max: number): number {
   if (value === null || value === "") return fallback;

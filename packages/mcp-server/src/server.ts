@@ -68,11 +68,13 @@ function summarizeLine(t: {
   durationMs: number;
   name: string;
   model?: string | null;
+  environment?: string | null;
   spanCount: number;
   errorCount: number;
 }): string {
   const model = t.model ? ` · ${t.model}` : "";
-  return `${t.id}  ${t.startedAt}  ${t.status.padEnd(9)} ${ms(t.durationMs).padStart(8)}  ${t.name}${model}  (${t.spanCount} spans, ${t.errorCount} errors)`;
+  const environment = t.environment ? ` [${t.environment}]` : "";
+  return `${t.id}  ${t.startedAt}  ${t.status.padEnd(9)} ${ms(t.durationMs).padStart(8)}  ${t.name}${model}${environment}  (${t.spanCount} spans, ${t.errorCount} errors)`;
 }
 
 function spanOutline(detail: TraceDetailLike): string {
@@ -111,6 +113,7 @@ export function createFireTraceMcpServer(
         "FireTrace stores completed LLM/agent traces (a trace is a tree of spans).",
         `This key belongs to project ${backend.projectId} with scopes: ${backend.scopes.join(", ") || "none"}.`,
         "Use list_traces to find traces, get_trace for the full span tree, find_spans to locate specific spans, and record_trace to store a new trace (call get_ingest_schema first if unsure of the shape). add_score attaches a judgement made after the run (a rating, a verdict, an eval result) as a queryable score; list_scores reads scores back. patch_trace_metadata merges free-form keys into a trace's metadata.",
+        'Every trace carries the environment of the key that recorded it (for example production, preview or development; null when the key has none). Pass environment to list_traces and list_scores to keep environments apart, or environment="unassigned" for traces without one.',
         "A stored trace is immutable apart from its metadata and scores; deletion is explicit and permanent.",
       ].join(" "),
     },
@@ -160,13 +163,20 @@ export function createFireTraceMcpServer(
           model: z.string().max(200).optional().describe("Exact model name, e.g. gpt-5"),
           name: z.string().max(500).optional().describe("Exact trace name"),
           tag: z.string().max(64).optional().describe("One tag the trace must carry"),
+          environment: z
+            .string()
+            .max(40)
+            .optional()
+            .describe(
+              'Environment stamped from the recording key (e.g. production, preview), or "unassigned" for traces without one',
+            ),
           sessionId: z.string().max(200).optional(),
           userId: z.string().max(200).optional(),
           sort: z
             .enum(["newest", "slowest", "costliest"])
             .optional()
             .describe(
-              "Ordering; slowest and costliest combine only with status, model, name and tag",
+              "Ordering; slowest and costliest combine only with status, model, name, tag and environment",
             ),
           from: z
             .string()
@@ -200,6 +210,7 @@ export function createFireTraceMcpServer(
               id: t.id,
               name: t.name,
               status: t.status,
+              environment: t.environment ?? null,
               startedAt: t.startedAt,
               durationMs: t.durationMs,
               model: t.model ?? null,
@@ -374,6 +385,13 @@ export function createFireTraceMcpServer(
         inputSchema: {
           traceId: TRACE_ID.optional().describe("Only this trace's scores"),
           name: SCORE_NAME.optional().describe("Only scores with this name"),
+          environment: z
+            .string()
+            .max(40)
+            .optional()
+            .describe(
+              'Only scores whose trace is in this environment ("unassigned" for none); ignored with traceId',
+            ),
           limit: z.number().int().min(1).max(500).optional().describe("Page size, default 50"),
           cursor: z.string().max(500).optional().describe("nextCursor from a previous call"),
         },

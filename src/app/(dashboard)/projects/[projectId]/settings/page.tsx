@@ -5,9 +5,9 @@ import { ApiKeysPanel } from "@/components/settings/ApiKeysPanel";
 import { DeleteProjectDialog } from "@/components/settings/DeleteProjectDialog";
 import { ProjectSettingsForm } from "@/components/settings/ProjectSettingsForm";
 import { serverEnv } from "@/lib/env/server";
+import { listProjectApiKeys } from "@/lib/environment-selection";
 import { adminDb } from "@/lib/firebase/admin";
 import { isProjectId } from "@/lib/firetrace/ids";
-import { listApiKeys } from "@/lib/firetrace/projects";
 import { formatBytes, percentOfLimit, storageLevel } from "@/lib/firetrace/storage";
 import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
@@ -24,7 +24,7 @@ export default async function ProjectSettingsPage({
   const db = adminDb();
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
-  const keys = await listApiKeys(db, projectId);
+  const keys = await listProjectApiKeys(db, projectId);
   const level = storageLevel(project.estimatedBytes, env.storageLimitBytes);
 
   return (
@@ -103,6 +103,7 @@ export default async function ProjectSettingsPage({
             </div>
           </div>
           <p className="mt-4 text-sm leading-relaxed text-ink-2">
+            These figures cover every environment: storage is one quota for the whole project.
             Infinite retention means FireTrace never deletes data because of its age. Capacity is
             bounded by your Firebase plan&apos;s storage quota: on the Firestore free tier that is 1
             GiB of stored data. The figure above is FireTrace&apos;s serialized estimate, not

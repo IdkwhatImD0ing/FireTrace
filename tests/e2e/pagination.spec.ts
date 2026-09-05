@@ -159,7 +159,7 @@ test("the current page can be exported as CSV with the same filters", async () =
   expect(res.status()).toBe(200);
   expect(res.headers()["content-type"]).toContain("text/csv");
   const lines = (await res.text()).trim().split("\r\n");
-  expect(lines[0]).toMatch(/^id,name,status,startedAt/);
+  expect(lines[0]).toMatch(/^id,name,status,environment,startedAt/);
   expect(lines).toHaveLength(1 + PAGE_SIZE);
   expect(lines[1]).toContain("run-59");
   expect(lines.some((l) => l.includes("run-45,"))).toBe(false);

@@ -38,6 +38,7 @@ describe("requireScope", () => {
     expiresAt: null,
     lastUsedAt: null,
     plan: "owner",
+    environment: null,
   };
 
   it("passes when the scope is present and throws 403 insufficient_scope otherwise", () => {

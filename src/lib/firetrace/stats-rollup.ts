@@ -13,6 +13,14 @@ import { FieldValue } from "firebase-admin/firestore";
  */
 
 export const STATS_COLLECTION = "stats";
+/**
+ * Per-environment twin of `stats`, so the dashboard's numbers can follow the
+ * environment selector: `projects/{id}/statsByEnv/{environment}:{YYYY-MM-DD}`,
+ * with `_unassigned` for traces that carry no environment. Same document
+ * shape, same increments, one extra read and write per transaction.
+ */
+export const STATS_ENV_COLLECTION = "statsByEnv";
+export const UNASSIGNED_STATS_KEY = "_unassigned";
 export const OTHER_KEY = "_other";
 export const HIST_BUCKETS = 48;
 export const STATS_CAPS = { models: 100, names: 250, scoreNames: 50, scoreLabels: 50 } as const;
@@ -32,6 +40,15 @@ export function decodeKey(key: string): string | null {
 /** `2026-09-02T19:01:02.120Z` → `2026-09-02`. */
 export function statsDayId(iso: string): string {
   return iso.slice(0, 10);
+}
+
+/** Id prefix of an environment's day documents; `:` is not a slug character, so prefixes never overlap. */
+export function envStatsKey(environment: string | null): string {
+  return environment ?? UNASSIGNED_STATS_KEY;
+}
+
+export function envStatsDocId(environment: string | null, day: string): string {
+  return `${envStatsKey(environment)}:${day}`;
 }
 
 export function hourOf(iso: string): number {

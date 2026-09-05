@@ -5,7 +5,8 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/v1/key — describe the calling key (no scope required). Lets a
- * client verify a key and learn which scopes it carries before doing work.
+ * client verify a key and learn which scopes it carries and which
+ * environment its traces land in before doing work.
  */
 export const GET = withApiKey(null, async ({ auth, requestId }) => {
   return jsonResponse(
@@ -15,6 +16,7 @@ export const GET = withApiKey(null, async ({ auth, requestId }) => {
       scopes: auth.scopes,
       expiresAt: auth.expiresAt ? auth.expiresAt.toISOString() : null,
       lastUsedAt: auth.lastUsedAt ? auth.lastUsedAt.toISOString() : null,
+      environment: auth.environment,
     },
     200,
     requestId,

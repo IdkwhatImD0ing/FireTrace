@@ -1,16 +1,20 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { generateApiKey, hashApiKey } from "./api-keys";
 import { toApiKeySummary, toProject } from "./convert";
+import { environmentFromDocument } from "./environment";
 import { ApiError } from "./errors";
 import { newProjectId } from "./ids";
 import { DEFAULT_KEY_SCOPES, scopesFromDocument, type KeyScope } from "./scopes";
 import { deleteScoresForTrace } from "./scores";
 import {
+  envStatsDocId,
   existingKey,
   STATS_COLLECTION,
+  STATS_ENV_COLLECTION,
   statsDayId,
   statsIncrements,
   traceStatsDeltas,
+  type StatsDayDoc,
 } from "./stats-rollup";
 import { TRIAL_MAX_PROJECTS, type Plan } from "./trial";
 import type { ApiKeySummary, Project } from "./types";
@@ -210,7 +214,12 @@ export async function deleteTrace(
 
   await deleteQueryInBatches(db, traceRef.collection("spans"));
   // Score bytes are counted on the trace, so the transaction below gives them back too.
-  await deleteScoresForTrace(db, projectId, traceId);
+  await deleteScoresForTrace(
+    db,
+    projectId,
+    traceId,
+    environmentFromDocument(traceSnap.get("environment")),
+  );
   await deleteQueryInBatches(db, projectRef.collection("evalRuns").where("traceId", "==", traceId));
 
   await db.runTransaction(async (tx) => {
@@ -223,7 +232,15 @@ export async function deleteTrace(
     const dayRef = startedAt
       ? projectRef.collection(STATS_COLLECTION).doc(statsDayId(startedAt))
       : null;
-    const daySnap = dayRef ? await tx.get(dayRef) : null;
+    const envDayRef = startedAt
+      ? projectRef
+          .collection(STATS_ENV_COLLECTION)
+          .doc(envStatsDocId(environmentFromDocument(d.environment), statsDayId(startedAt)))
+      : null;
+    const [daySnap, envDaySnap] = await Promise.all([
+      dayRef ? tx.get(dayRef) : null,
+      envDayRef ? tx.get(envDayRef) : null,
+    ]);
 
     tx.delete(traceRef);
     if (projectSnap.exists) {
@@ -235,13 +252,17 @@ export async function deleteTrace(
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
-    // Give the day's rollup back; a day that was never rolled up (pre-dashboard trace) is left alone.
-    if (dayRef && startedAt && daySnap?.exists) {
-      const day = daySnap.data() ?? {};
+    // Give the day's rollups back; a day that was never rolled up (pre-dashboard trace) is left alone.
+    const giveBack = (
+      ref: FirebaseFirestore.DocumentReference | null,
+      snap: FirebaseFirestore.DocumentSnapshot | null,
+    ) => {
+      if (!ref || !startedAt || !snap?.exists) return;
+      const day = (snap.data() ?? {}) as StatsDayDoc;
       const model = typeof d.model === "string" ? d.model : null;
       const name = typeof d.name === "string" ? d.name : "";
       tx.set(
-        dayRef,
+        ref,
         statsIncrements(
           traceStatsDeltas(
             {
@@ -260,7 +281,9 @@ export async function deleteTrace(
         ),
         { merge: true },
       );
-    }
+    };
+    giveBack(dayRef, daySnap);
+    giveBack(envDayRef, envDaySnap);
   });
 }
 
@@ -308,6 +331,7 @@ export async function deleteProject(
   const evaluators = await deleteQueryInBatches(db, projectRef.collection("evaluators"));
   const evalRuns = await deleteQueryInBatches(db, projectRef.collection("evalRuns"));
   await deleteQueryInBatches(db, projectRef.collection(STATS_COLLECTION));
+  await deleteQueryInBatches(db, projectRef.collection(STATS_ENV_COLLECTION));
   return { traces, spans, apiKeys, scores, evaluators, evalRuns };
 }
 
@@ -342,6 +366,8 @@ export async function createApiKey(
     pepper: string;
     scopes?: KeyScope[];
     expiresAt?: Date | null;
+    /** Already validated by `normalizeEnvironment`; null or omitted = unassigned. */
+    environment?: string | null;
     /** Recorded on the key so trial keys can be switched off with trial mode. */
     plan?: Plan;
     /** Trial projects: refuse when this many keys (revoked included) already exist. */
@@ -365,9 +391,31 @@ export async function createApiKey(
     expiresAt: input.expiresAt ? Timestamp.fromDate(input.expiresAt) : null,
     lastUsedAt: null,
     plan: input.plan ?? "owner",
+    environment: input.environment ?? null,
   });
   const snap = await ref.get();
   return { key: toApiKeySummary(snap.id, snap.data() ?? {}), plaintext: generated.plaintext };
+}
+
+/**
+ * Change which environment a key stamps from now on. Traces it already
+ * ingested keep theirs: the environment was copied at ingest time, never
+ * looked up through the key. `scripts/backfill-environment.ts` reassigns history.
+ */
+export async function setApiKeyEnvironment(
+  db: Firestore,
+  projectId: string,
+  keyId: string,
+  environment: string | null,
+): Promise<ApiKeySummary> {
+  const ref = db.collection("apiKeys").doc(keyId);
+  const snap = await ref.get();
+  if (!snap.exists || snap.get("projectId") !== projectId) {
+    throw new ApiError(404, "not_found", "API key not found in this project.");
+  }
+  await ref.update({ environment });
+  const updated = await ref.get();
+  return toApiKeySummary(updated.id, updated.data() ?? {});
 }
 
 export async function revokeApiKey(db: Firestore, projectId: string, keyId: string): Promise<void> {
@@ -448,6 +496,7 @@ export async function rotateApiKey(
       expiresAt: old.get("expiresAt") instanceof Timestamp ? old.get("expiresAt") : null,
       lastUsedAt: null,
       plan: old.get("plan") === "trial" ? "trial" : "owner",
+      environment: environmentFromDocument(old.get("environment")),
     });
   });
 

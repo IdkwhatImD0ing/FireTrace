@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/EmptyState";
 import { ScoreSummary } from "@/components/scores/ScoreSummary";
 import { ScoreTable } from "@/components/scores/ScoreTable";
+import { getEnvironmentView } from "@/lib/environment-selection";
 import { adminDb } from "@/lib/firebase/admin";
 import { isProjectId } from "@/lib/firetrace/ids";
 import { listScores, parseScoreFilters, summarizeScores } from "@/lib/firetrace/scores";
@@ -28,7 +29,9 @@ export default async function ProjectScoresPage({
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
 
-  const filters = parseScoreFilters(sp);
+  // Scores follow the environment of their trace, so the selector applies here too.
+  const view = await getEnvironmentView(db, projectId);
+  const filters = { ...parseScoreFilters(sp), environment: view.filter };
   const page = await listScores(db, projectId, filters, {
     after: firstParam(sp.after),
     limit: PAGE_SIZE,
@@ -101,9 +104,9 @@ export default async function ProjectScoresPage({
       </form>
 
       {page.scores.length === 0 ? (
-        filtering ? (
+        filtering || view.filter ? (
           <p className="card px-5 py-8 text-center text-sm text-ink-2">
-            No scores match these filters.
+            No {view.filter ? `${view.selection} ` : ""}scores match these filters.
           </p>
         ) : (
           <EmptyState
