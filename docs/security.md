@@ -94,6 +94,10 @@ Traces are immutable apart from `metadata`. A retry with identical content is a 
 
 `PATCH /api/v1/traces/{traceId}` (`src/lib/firetrace/metadata.ts`) is the single exception, and a narrow one: a strict body admits `metadata` and nothing else, the merge runs in a transaction that first confirms the trace exists under the key's own project, and the write touches `metadata`, `metadataUpdatedAt`, and `estimatedBytes` only — never a span, an identifier, a timing, or `bodyHash`. It is last-writer-wins with no history, so metadata is not a place for anything that needs an audit trail.
 
+### Evaluators (optional)
+
+LLM-as-a-judge evaluators ([evaluators.md](./evaluators.md)) are enabled only when `FIRETRACE_EVAL_BASE_URL`, `FIRETRACE_EVAL_API_KEY` and `FIRETRACE_EVAL_MODEL` are all set. The key is server-only and is sent as a bearer token to that one endpoint. Only allowlisted owners can define or run evaluators (`src/lib/actions.ts` rejects trial sessions with `403`), because a run spends the key and sends the trace's input, output, metadata and span names to the endpoint. FireTrace logs the model, status, timing and token counts of each call, never the prompt or the completion; the judge's answer is stored only as a score value and comment.
+
 ## Checklist
 
 The handoff checklist, with the implementing file or the owner action for each item.

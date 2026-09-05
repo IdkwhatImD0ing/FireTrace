@@ -24,11 +24,11 @@
  *    project's traces. Expect one document read per trace in the project.
  */
 import { pathToFileURL } from "node:url";
-import { cert, getApps, initializeApp, type ServiceAccount } from "firebase-admin/app";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 import { patchTraceMetadata } from "../src/lib/firetrace/metadata";
 import { deleteTrace } from "../src/lib/firetrace/projects";
 import type { JsonObject } from "../src/lib/firetrace/schema";
+import { connectFirestore } from "./firestore-connect";
 
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 const PROJECT_ID_RE = /^[0-9a-f]{24}$/;
@@ -159,33 +159,9 @@ function parseArgs(argv: string[]): MigrateOptions {
   return { projectId, apply: argv.includes("--apply"), prefix: get("--prefix") ?? DEFAULT_PREFIX };
 }
 
-/** Same credential order as src/lib/firebase/admin.ts, without the server-only import. */
-function connect(): Firestore {
-  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-  if (!projectId) throw new Error("NEXT_PUBLIC_FIREBASE_PROJECT_ID is required.");
-  if (getApps().length === 0) {
-    if (process.env.FIRETRACE_USE_EMULATORS === "true") {
-      process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8080";
-      initializeApp({ projectId });
-    } else {
-      // The Admin SDK silently targets an emulator whenever this is set.
-      delete process.env.FIRESTORE_EMULATOR_HOST;
-      const base64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-      if (base64) {
-        const json = JSON.parse(Buffer.from(base64, "base64").toString("utf8")) as ServiceAccount;
-        initializeApp({ credential: cert(json), projectId });
-      } else {
-        // Application Default Credentials (gcloud auth application-default login).
-        initializeApp({ projectId });
-      }
-    }
-  }
-  return getFirestore();
-}
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const db = connect();
+  const db = connectFirestore();
   if (!(await db.collection("projects").doc(options.projectId).get()).exists) {
     throw new Error(`Project ${options.projectId} does not exist in this Firebase project.`);
   }

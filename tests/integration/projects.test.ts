@@ -104,7 +104,14 @@ describe("trace and project deletion against the emulator", () => {
     expect(await spanPathsUnderProject(doomed.id)).toHaveLength(15);
 
     const removed = await deleteProject(db(), doomed.id);
-    expect(removed).toEqual({ traces: 3, spans: 15, apiKeys: 2 });
+    expect(removed).toEqual({
+      traces: 3,
+      spans: 15,
+      apiKeys: 2,
+      scores: 0,
+      evaluators: 0,
+      evalRuns: 0,
+    });
 
     expect((await db().collection("projects").doc(doomed.id).get()).exists).toBe(false);
     expect(await traceIds(doomed.id)).toEqual([]);

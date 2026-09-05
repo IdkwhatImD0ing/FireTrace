@@ -4,6 +4,14 @@ import { toApiKeySummary, toProject } from "./convert";
 import { ApiError } from "./errors";
 import { newProjectId } from "./ids";
 import { DEFAULT_KEY_SCOPES, scopesFromDocument, type KeyScope } from "./scopes";
+import { deleteScoresForTrace } from "./scores";
+import {
+  existingKey,
+  STATS_COLLECTION,
+  statsDayId,
+  statsIncrements,
+  traceStatsDeltas,
+} from "./stats-rollup";
 import { TRIAL_MAX_PROJECTS, type Plan } from "./trial";
 import type { ApiKeySummary, Project } from "./types";
 
@@ -200,13 +208,22 @@ export async function deleteTrace(
   if (!traceSnap.exists) throw new ApiError(404, "not_found", "Trace not found.");
 
   await deleteQueryInBatches(db, traceRef.collection("spans"));
+  // Score bytes are counted on the trace, so the transaction below gives them back too.
+  await deleteScoresForTrace(db, projectId, traceId);
+  await deleteQueryInBatches(db, projectRef.collection("evalRuns").where("traceId", "==", traceId));
 
   await db.runTransaction(async (tx) => {
     const [projectSnap, current] = await Promise.all([tx.get(projectRef), tx.get(traceRef)]);
     if (!current.exists) return; // deleted concurrently; counters already adjusted
-    const spanCount = typeof current.get("spanCount") === "number" ? current.get("spanCount") : 0;
-    const bytes =
-      typeof current.get("estimatedBytes") === "number" ? current.get("estimatedBytes") : 0;
+    const d = current.data() ?? {};
+    const spanCount = typeof d.spanCount === "number" ? d.spanCount : 0;
+    const bytes = typeof d.estimatedBytes === "number" ? d.estimatedBytes : 0;
+    const startedAt = d.startedAt instanceof Timestamp ? d.startedAt.toDate().toISOString() : null;
+    const dayRef = startedAt
+      ? projectRef.collection(STATS_COLLECTION).doc(statsDayId(startedAt))
+      : null;
+    const daySnap = dayRef ? await tx.get(dayRef) : null;
+
     tx.delete(traceRef);
     if (projectSnap.exists) {
       const p = projectSnap.data() ?? {};
@@ -217,19 +234,52 @@ export async function deleteTrace(
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
+    // Give the day's rollup back; a day that was never rolled up (pre-dashboard trace) is left alone.
+    if (dayRef && startedAt && daySnap?.exists) {
+      const day = daySnap.data() ?? {};
+      const model = typeof d.model === "string" ? d.model : null;
+      const name = typeof d.name === "string" ? d.name : "";
+      tx.set(
+        dayRef,
+        statsIncrements(
+          traceStatsDeltas(
+            {
+              name,
+              status: typeof d.status === "string" ? d.status : "unset",
+              startedAt,
+              durationMs: typeof d.durationMs === "number" ? d.durationMs : 0,
+              model,
+              usage: d.usage && typeof d.usage === "object" ? d.usage : {},
+              costUsd: typeof d.costUsd === "number" ? d.costUsd : null,
+              spanCount,
+            },
+            { model: existingKey(day.byModel, model), name: existingKey(day.byName, name) },
+          ),
+          -1,
+        ),
+        { merge: true },
+      );
+    }
   });
 }
 
 /**
- * Delete a project: every trace's spans, every trace, every API key, then the
- * project document. Firestore does not cascade, so this walks the tree and
- * awaits completion.
+ * Delete a project: every API key, the project document, then every trace's
+ * spans, every trace, every score, and the evaluators with their run log.
+ * Firestore does not cascade, so this walks the tree and awaits completion.
  */
 export async function deleteProject(
   db: Firestore,
   projectId: string,
   onProgress?: (message: string) => void,
-): Promise<{ traces: number; spans: number; apiKeys: number }> {
+): Promise<{
+  traces: number;
+  spans: number;
+  apiKeys: number;
+  scores: number;
+  evaluators: number;
+  evalRuns: number;
+}> {
   const projectRef = db.collection("projects").doc(projectId);
   if (!(await projectRef.get()).exists) throw new ApiError(404, "not_found", "Project not found.");
 
@@ -253,7 +303,11 @@ export async function deleteProject(
     }
     onProgress?.(`Deleted ${traces} traces and ${spans} spans so far`);
   }
-  return { traces, spans, apiKeys };
+  const scores = await deleteQueryInBatches(db, projectRef.collection("scores"));
+  const evaluators = await deleteQueryInBatches(db, projectRef.collection("evaluators"));
+  const evalRuns = await deleteQueryInBatches(db, projectRef.collection("evalRuns"));
+  await deleteQueryInBatches(db, projectRef.collection(STATS_COLLECTION));
+  return { traces, spans, apiKeys, scores, evaluators, evalRuns };
 }
 
 // ---------------------------------------------------------------------------

@@ -147,7 +147,7 @@ test("the MCP endpoint offers scope-appropriate tools and reads the trace", asyn
   const names = ((await tools.json()).result.tools as Array<{ name: string }>)
     .map((t) => t.name)
     .sort();
-  expect(names).toEqual(["find_spans", "get_project", "get_trace", "list_traces"]);
+  expect(names).toEqual(["find_spans", "get_project", "get_trace", "list_scores", "list_traces"]);
 
   const listed = await call(readKey, "tools/call", {
     name: "list_traces",

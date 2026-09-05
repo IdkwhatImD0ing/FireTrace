@@ -4,10 +4,11 @@ import { useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNo
 import { StatusBadge, StatusIcon } from "@/components/StatusBadge";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { JsonView } from "@/components/ui/JsonView";
+import { MessageList } from "./MessageList";
 import { Tabs, type TabItem } from "@/components/ui/Tabs";
 import { KIND_COLOR } from "@/lib/firetrace/kinds";
 import { SPAN_KINDS, type SpanKind } from "@/lib/firetrace/schema";
-import { buildSpanTree } from "@/lib/firetrace/tree";
+import { buildSpanTree, descendantCount, visibleRows } from "@/lib/firetrace/tree";
 import type { SpanDetail, TraceDetail } from "@/lib/firetrace/types";
 import { formatBytes } from "@/lib/firetrace/storage";
 import {
@@ -16,6 +17,7 @@ import {
   formatDuration,
   formatOffset,
   formatTokens,
+  totalTokens,
 } from "@/lib/format";
 
 type Selection = { kind: "trace" } | { kind: "span"; id: string };
@@ -82,11 +84,14 @@ export function TraceExplorer({
   spans,
   projectId,
   preview = false,
+  scoresTab,
 }: {
   trace: TraceDetail;
   spans: SpanDetail[];
   projectId: string;
   preview?: boolean;
+  /** Rendered as a "Scores" inspector tab on the trace page; absent in the landing preview. */
+  scoresTab?: Pick<TabItem, "badge" | "content">;
 }) {
   const tree = useMemo(
     () =>
@@ -96,9 +101,26 @@ export function TraceExplorer({
       ),
     [spans],
   );
-  const rows = tree.rows;
+  const allRows = tree.rows;
   const [selection, setSelection] = useState<Selection>({ kind: "trace" });
   const [tab, setTab] = useState("overview");
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const [query, setQuery] = useState("");
+  const rows = useMemo(() => visibleRows(allRows, collapsed, query), [allRows, collapsed, query]);
+  const searching = query.trim().length > 0;
+
+  function toggle(id: string) {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function collapseAll() {
+    setCollapsed(new Set(allRows.filter((r) => r.children.length > 0).map((r) => r.span.id)));
+  }
 
   const t0 = Math.min(Date.parse(trace.startedAt), ...spans.map((s) => Date.parse(s.startedAt)));
   const t1 = Math.max(Date.parse(trace.endedAt), ...spans.map((s) => Date.parse(s.endedAt)));
@@ -113,6 +135,16 @@ export function TraceExplorer({
   }
 
   function onListKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selection.kind === "span") {
+      const node = allRows.find((r) => r.span.id === selection.id);
+      if (node && node.children.length > 0 && !searching) {
+        e.preventDefault();
+        const isCollapsed = collapsed.has(selection.id);
+        if (e.key === "ArrowLeft" && !isCollapsed) toggle(selection.id);
+        if (e.key === "ArrowRight" && isCollapsed) toggle(selection.id);
+      }
+      return;
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
     e.preventDefault();
     const order: Selection[] = [
@@ -176,8 +208,8 @@ export function TraceExplorer({
         </div>
       ),
     },
-    { id: "input", label: "Input", content: <JsonView value={trace.input} /> },
-    { id: "output", label: "Output", content: <JsonView value={trace.output} /> },
+    { id: "input", label: "Input", content: <MessageList value={trace.input} /> },
+    { id: "output", label: "Output", content: <MessageList value={trace.output} /> },
     {
       id: "metadata",
       label: "Metadata",
@@ -189,11 +221,12 @@ export function TraceExplorer({
         />
       ),
     },
+    ...(scoresTab ? [{ id: "scores", label: "Scores", ...scoresTab }] : []),
   ];
 
   const spanTabs = (span: SpanDetail): TabItem[] => {
     const err = errorDetails(span);
-    const node = rows.find((r) => r.span.id === span.id);
+    const node = allRows.find((r) => r.span.id === span.id);
     return [
       {
         id: "overview",
@@ -241,8 +274,8 @@ export function TraceExplorer({
           </div>
         ),
       },
-      { id: "input", label: "Input", content: <JsonView value={span.input} /> },
-      { id: "output", label: "Output", content: <JsonView value={span.output} /> },
+      { id: "input", label: "Input", content: <MessageList value={span.input} /> },
+      { id: "output", label: "Output", content: <MessageList value={span.output} /> },
       {
         id: "attributes",
         label: "Attributes",
@@ -323,7 +356,31 @@ export function TraceExplorer({
     >
       <div className="card [--name-col:220px] md:[--name-col:320px]">
         <div className="grid grid-cols-[var(--name-col)_1fr] border-b border-line">
-          <div className="mono-label px-4 py-2.5">span · kind</div>
+          <div className="flex items-center gap-2 px-3 py-1.5">
+            {preview ? (
+              <span className="mono-label px-1 py-1">span · kind</span>
+            ) : (
+              <>
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Find span…"
+                  aria-label="Find span by name"
+                  className="input h-7 min-w-0 flex-1 px-2 py-0 text-xs"
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm shrink-0"
+                  onClick={collapsed.size ? () => setCollapsed(new Set()) : collapseAll}
+                  disabled={searching}
+                  title={collapsed.size ? "Expand all" : "Collapse all"}
+                >
+                  {collapsed.size ? "Expand" : "Collapse"}
+                </button>
+              </>
+            )}
+          </div>
           <div className="relative mx-3">
             {TICKS.map((f) => (
               <span
@@ -404,7 +461,13 @@ export function TraceExplorer({
                   role="option"
                   data-row={i + 1}
                   tabIndex={selected ? 0 : -1}
-                  onClick={() => select({ kind: "span", id: span.id })}
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest("[data-toggle]")) {
+                      toggle(span.id);
+                      return;
+                    }
+                    select({ kind: "span", id: span.id });
+                  }}
                   aria-selected={selected}
                   disabled={preview}
                   className={`group grid w-full grid-cols-[var(--name-col)_1fr] items-stretch text-left transition-colors hover:bg-surface-2/70 focus-visible:bg-surface-2/70 ${
@@ -422,6 +485,15 @@ export function TraceExplorer({
                       aria-hidden
                     />
                     <span className="truncate text-sm text-ink">{span.name}</span>
+                    {row.children.length > 0 && !preview && !searching && (
+                      <span
+                        data-toggle
+                        title={collapsed.has(span.id) ? "Expand" : "Collapse"}
+                        className="shrink-0 rounded px-1 font-mono text-[10px] text-ink-3 hover:bg-surface-3 hover:text-ink"
+                      >
+                        {collapsed.has(span.id) ? `+${descendantCount(row)}` : "−"}
+                      </span>
+                    )}
                     {row.orphan && (
                       <span
                         className="chip shrink-0 border-warn/50 text-warn"
@@ -431,6 +503,18 @@ export function TraceExplorer({
                       </span>
                     )}
                     <span className="ml-auto flex shrink-0 items-center gap-2">
+                      {(totalTokens(span.usage) !== null || span.costUsd !== null) && (
+                        <span className="hidden font-mono text-[10px] text-ink-3 md:inline">
+                          {[
+                            totalTokens(span.usage) !== null
+                              ? `${formatTokens(totalTokens(span.usage))} tok`
+                              : null,
+                            span.costUsd !== null ? formatCost(span.costUsd) : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      )}
                       {span.status !== "ok" && <StatusIcon status={span.status} />}
                       <span className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
                         {span.kind}

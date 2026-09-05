@@ -7,6 +7,7 @@ import {
   listTraces,
   MAX_PAGE_SIZE,
   parseTraceFilters,
+  parseTraceSort,
 } from "@/lib/firetrace/queries";
 import { LIMITS } from "@/lib/firetrace/schema";
 import { log } from "@/lib/log";
@@ -72,7 +73,7 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
 
 /**
  * GET /api/v1/traces — newest-first, cursor-paginated list (scope traces:read).
- *   ?status=&model=&sessionId=&userId=&from=&to=&limit=&after=&before=
+ *   ?status=&model=&name=&tag=&sessionId=&userId=&from=&to=&sort=&limit=&after=&before=
  */
 export const GET = withApiKey("traces:read", async ({ db, auth, requestId }, request) => {
   const sp = request.nextUrl.searchParams;
@@ -81,6 +82,7 @@ export const GET = withApiKey("traces:read", async ({ db, auth, requestId }, req
     after: sp.get("after") ?? undefined,
     before: sp.get("before") ?? undefined,
     limit: intParam(sp.get("limit"), DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE),
+    sort: parseTraceSort(sp.get("sort")),
   });
   return jsonResponse(page, 200, requestId);
 });

@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { ingestRequestSchema, LIMITS, SPAN_KINDS, STATUSES } from "./schema";
+import {
+  ingestRequestSchema,
+  LIMITS,
+  SCORE_DATA_TYPES,
+  SCORE_LIMITS,
+  SCORE_SOURCES,
+  SPAN_KINDS,
+  STATUSES,
+} from "./schema";
 import { KEY_SCOPES, SCOPE_DESCRIPTIONS } from "./scopes";
 
 /**
@@ -24,6 +32,7 @@ const errorSchema = {
             "insufficient_scope",
             "not_found",
             "trace_id_conflict",
+            "conflict",
             "payload_too_large",
             "quota_exhausted",
             "trial_limit_reached",
@@ -77,6 +86,34 @@ const traceSummarySchema = {
     errorCount: { type: "integer" },
     estimatedBytes: { type: "integer" },
     ingestedAt: { type: ["string", "null"], format: "date-time" },
+    scores: {
+      type: "object",
+      description: "Newest score per name. The full history is at /api/v1/traces/{traceId}/scores.",
+      additionalProperties: { $ref: "#/components/schemas/ScoreSummary" },
+    },
+  },
+} as const;
+
+const scoreValueSchema = {
+  oneOf: [{ type: "number" }, { type: "string" }, { type: "boolean" }],
+  description: "A number for numeric, a string for categorical, a boolean for boolean scores",
+} as const;
+
+const scoreSchema = {
+  type: "object",
+  required: ["id", "traceId", "name", "dataType", "value", "source", "createdAt"],
+  properties: {
+    id: { type: "string", pattern: "^[0-9a-f]{16}$" },
+    traceId: { type: "string", pattern: "^[0-9a-f]{32}$" },
+    spanId: { type: ["string", "null"] },
+    name: { type: "string" },
+    dataType: { type: "string", enum: [...SCORE_DATA_TYPES] },
+    value: scoreValueSchema,
+    comment: { type: ["string", "null"] },
+    source: { type: "string", enum: [...SCORE_SOURCES] },
+    evaluatorId: { type: ["string", "null"] },
+    runId: { type: ["string", "null"] },
+    createdAt: { type: "string", format: "date-time" },
   },
 } as const;
 
@@ -137,6 +174,15 @@ export function ingestRequestJsonSchema(): Record<string, unknown> {
 }
 
 const bearer = [{ apiKey: [] }];
+const traceIdParam = {
+  name: "traceId",
+  in: "path",
+  required: true,
+  schema: { type: "string", pattern: "^[0-9a-f]{32}$" },
+} as const;
+const errorRef = {
+  content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+} as const;
 const errorResponses = {
   "401": {
     description: "Missing, invalid, revoked, or expired API key",
@@ -208,6 +254,47 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
         },
         TraceSummary: traceSummarySchema,
         Span: spanSchema,
+        ScoreSummary: {
+          type: "object",
+          required: ["scoreId", "dataType", "value", "evaluatorId"],
+          properties: {
+            scoreId: { type: "string" },
+            dataType: { type: "string", enum: [...SCORE_DATA_TYPES] },
+            value: scoreValueSchema,
+            evaluatorId: { type: ["string", "null"] },
+          },
+        },
+        ScoreInput: {
+          type: "object",
+          required: ["name", "dataType", "value"],
+          additionalProperties: false,
+          properties: {
+            name: {
+              type: "string",
+              pattern: "^[A-Za-z0-9_-]+$",
+              maxLength: SCORE_LIMITS.maxNameLength,
+              description: "Doubles as the score's display name; letters, digits, '_' and '-'",
+            },
+            dataType: { type: "string", enum: [...SCORE_DATA_TYPES] },
+            value: scoreValueSchema,
+            comment: { type: "string", maxLength: SCORE_LIMITS.maxCommentLength },
+            spanId: {
+              type: "string",
+              pattern: "^[0-9a-fA-F]{16}$",
+              description: "Scope the score to one span instead of the whole trace",
+            },
+          },
+        },
+        Score: scoreSchema,
+        ScorePage: {
+          type: "object",
+          required: ["scores", "nextCursor", "pageSize"],
+          properties: {
+            scores: { type: "array", items: { $ref: "#/components/schemas/Score" } },
+            nextCursor: { type: ["string", "null"] },
+            pageSize: { type: "integer" },
+          },
+        },
         TracePage: {
           type: "object",
           required: ["traces", "nextCursor", "prevCursor", "pageSize"],
@@ -308,12 +395,33 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
           operationId: "listTraces",
           summary: "List traces newest first with cursor pagination",
           description:
-            "Requires `traces:read`. Filters combine with AND. Use `after`/`before` cursors from a previous page; never offsets.",
+            "Requires `traces:read`. Filters combine with AND. Use `after`/`before` cursors from a previous page; never offsets. `sort=slowest` (by durationMs) and `sort=costliest` (by costUsd; traces without a cost are omitted) combine only with `status`, `model`, `name` and `tag`; adding `sessionId`, `userId`, `from` or `to` is a 400. A cursor is only valid under the sort that produced it.",
           parameters: [
             { name: "status", in: "query", schema: { type: "string", enum: [...STATUSES] } },
             { name: "model", in: "query", schema: { type: "string" } },
+            {
+              name: "name",
+              in: "query",
+              schema: { type: "string" },
+              description: "Exact trace name",
+            },
+            {
+              name: "tag",
+              in: "query",
+              schema: { type: "string" },
+              description: "One tag the trace must carry",
+            },
             { name: "sessionId", in: "query", schema: { type: "string" } },
             { name: "userId", in: "query", schema: { type: "string" } },
+            {
+              name: "sort",
+              in: "query",
+              schema: {
+                type: "string",
+                enum: ["newest", "slowest", "costliest"],
+                default: "newest",
+              },
+            },
             {
               name: "from",
               in: "query",
@@ -360,26 +468,19 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
         },
       },
       "/api/v1/traces/{traceId}": {
-        parameters: [
-          {
-            name: "traceId",
-            in: "path",
-            required: true,
-            schema: { type: "string", pattern: "^[0-9a-f]{32}$" },
-          },
-        ],
+        parameters: [traceIdParam],
         get: {
           operationId: "getTrace",
-          summary: "One trace with all of its spans",
+          summary: "One trace with all of its spans and scores",
           description: "Requires `traces:read`.",
           responses: {
             "200": {
-              description: "Trace and spans",
+              description: "Trace, spans, and scores",
               content: {
                 "application/json": {
                   schema: {
                     type: "object",
-                    required: ["trace", "spans"],
+                    required: ["trace", "spans", "scores"],
                     properties: {
                       trace: {
                         allOf: [
@@ -397,6 +498,11 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
                         ],
                       },
                       spans: { type: "array", items: { $ref: "#/components/schemas/Span" } },
+                      scores: {
+                        type: "array",
+                        description: "Every score of the trace, newest first",
+                        items: { $ref: "#/components/schemas/Score" },
+                      },
                     },
                   },
                 },
@@ -469,6 +575,159 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
               description: "No such trace in this project",
               content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
             },
+            ...errorResponses,
+          },
+        },
+      },
+      "/api/v1/traces/{traceId}/scores": {
+        parameters: [traceIdParam],
+        post: {
+          operationId: "addScore",
+          summary: "Attach a score to a stored trace",
+          description: `Requires \`traces:write\`. A score is a judgement made after the run: a rating, a reviewer's verdict, an evaluator's result. Scores are append-only; adding a name again records a newer score, and the trace's \`scores\` summary keeps the newest per name. Unlike metadata, scores are indexed: list them per trace or across the project with \`GET /api/v1/scores\`. Limits: ${SCORE_LIMITS.maxPerTrace} scores per trace, names of up to ${SCORE_LIMITS.maxNameLength} characters, comments of up to ${SCORE_LIMITS.maxCommentLength} characters.`,
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/ScoreInput" } },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Stored",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["ok", "score", "requestId"],
+                    properties: {
+                      ok: { type: "boolean" },
+                      score: { $ref: "#/components/schemas/Score" },
+                      requestId: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              description:
+                "Invalid JSON, or a body that is not a score (the message names the field)",
+              ...errorRef,
+            },
+            "404": { description: "No such trace in this project", ...errorRef },
+            "409": {
+              description: "The trace already holds the maximum number of scores",
+              ...errorRef,
+            },
+            "413": { description: "Request over 2 MiB", ...errorRef },
+            "429": { description: "Firestore quota exhausted; nothing written", ...errorRef },
+            ...errorResponses,
+          },
+        },
+        get: {
+          operationId: "listTraceScores",
+          summary: "Every score of one trace, newest first",
+          description: "Requires `traces:read`.",
+          responses: {
+            "200": {
+              description: "Scores of the trace",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["traceId", "scores"],
+                    properties: {
+                      traceId: { type: "string" },
+                      scores: { type: "array", items: { $ref: "#/components/schemas/Score" } },
+                    },
+                  },
+                },
+              },
+            },
+            "404": { description: "No such trace in this project", ...errorRef },
+            ...errorResponses,
+          },
+        },
+      },
+      "/api/v1/traces/{traceId}/scores/{scoreId}": {
+        parameters: [
+          traceIdParam,
+          {
+            name: "scoreId",
+            in: "path",
+            required: true,
+            schema: { type: "string", pattern: "^[0-9a-f]{16}$" },
+          },
+        ],
+        delete: {
+          operationId: "deleteScore",
+          summary: "Delete one score",
+          description:
+            "Requires `traces:delete`. If it was the newest score of its name, the previous one takes its place in the trace's summary.",
+          responses: {
+            "200": {
+              description: "Deleted",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      ok: { type: "boolean" },
+                      traceId: { type: "string" },
+                      scoreId: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "404": { description: "No such score on this trace", ...errorRef },
+            ...errorResponses,
+          },
+        },
+      },
+      "/api/v1/scores": {
+        get: {
+          operationId: "listScores",
+          summary: "List scores across the project newest first with cursor pagination",
+          description: "Requires `traces:read`. Filters combine with AND.",
+          parameters: [
+            {
+              name: "name",
+              in: "query",
+              schema: { type: "string" },
+              description: "Exact score name",
+            },
+            {
+              name: "from",
+              in: "query",
+              schema: { type: "string", format: "date-time" },
+              description: "Inclusive lower bound on createdAt",
+            },
+            {
+              name: "to",
+              in: "query",
+              schema: { type: "string", format: "date-time" },
+              description: "Inclusive upper bound on createdAt",
+            },
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 500, default: 50 },
+            },
+            {
+              name: "after",
+              in: "query",
+              schema: { type: "string" },
+              description: "nextCursor from a previous page (older scores)",
+            },
+          ],
+          responses: {
+            "200": {
+              description: "A page of scores",
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/ScorePage" } },
+              },
+            },
+            "400": { description: "Invalid cursor or parameter", ...errorRef },
             ...errorResponses,
           },
         },

@@ -69,7 +69,39 @@ describe("buildServerEnv", () => {
       useEmulators: false,
       authEmulatorHost: "127.0.0.1:9099",
       firestoreEmulatorHost: "127.0.0.1:8080",
+      eval: null,
     });
+  });
+
+  it("enables evaluators only when all three FIRETRACE_EVAL_* values are set", () => {
+    const configured = ok({
+      ...development,
+      FIRETRACE_EVAL_BASE_URL: "https://api.openai.com/v1/",
+      FIRETRACE_EVAL_API_KEY: "sk-test",
+      FIRETRACE_EVAL_MODEL: "gpt-5",
+    });
+    expect(configured.eval).toEqual({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test",
+      model: "gpt-5",
+    });
+
+    const partial = problems({ ...development, FIRETRACE_EVAL_API_KEY: "sk-test" });
+    expect(partial).toHaveLength(1);
+    expect(partial[0]).toContain("set together");
+    expect(partial[0]).not.toContain("sk-test");
+
+    for (const value of ["api.openai.com/v1", "ftp://x", "http://"]) {
+      const list = problems({
+        ...development,
+        FIRETRACE_EVAL_BASE_URL: value,
+        FIRETRACE_EVAL_API_KEY: "sk-test",
+        FIRETRACE_EVAL_MODEL: "gpt-5",
+      });
+      expect(list).toEqual([
+        "FIRETRACE_EVAL_BASE_URL must be an absolute http(s) URL such as https://api.openai.com/v1",
+      ]);
+    }
   });
 
   it("accepts a complete production configuration", () => {

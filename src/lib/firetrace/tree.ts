@@ -97,3 +97,43 @@ export function buildSpanTree<T extends SpanLike>(
 
   return { roots, rows, cycles, orphanCount };
 }
+
+/** Number of nodes below `node`, for the "+n hidden" chip on a collapsed row. */
+export function descendantCount<T extends SpanLike>(node: TreeNode<T>): number {
+  return node.children.reduce((sum, child) => sum + 1 + descendantCount(child), 0);
+}
+
+/**
+ * The rows to render: a search keeps matching spans and their ancestors (and
+ * ignores collapsing, so matches are never hidden); otherwise descendants of
+ * collapsed rows are skipped. Rows must be in depth-first order.
+ */
+export function visibleRows<T extends SpanLike & { name: string }>(
+  rows: readonly TreeNode<T>[],
+  collapsed: ReadonlySet<string>,
+  query: string,
+): TreeNode<T>[] {
+  const needle = query.trim().toLowerCase();
+  let keep: Set<string> | null = null;
+  if (needle) {
+    keep = new Set();
+    const ancestors: TreeNode<T>[] = [];
+    for (const row of rows) {
+      ancestors.length = row.depth;
+      ancestors[row.depth] = row;
+      if (row.span.name.toLowerCase().includes(needle)) {
+        for (const ancestor of ancestors) if (ancestor) keep.add(ancestor.span.id);
+      }
+    }
+  }
+  const out: TreeNode<T>[] = [];
+  let hiddenBelow: number | null = null;
+  for (const row of rows) {
+    if (hiddenBelow !== null && row.depth > hiddenBelow) continue;
+    hiddenBelow = null;
+    if (keep && !keep.has(row.span.id)) continue;
+    out.push(row);
+    if (!keep && collapsed.has(row.span.id)) hiddenBelow = row.depth;
+  }
+  return out;
+}

@@ -22,7 +22,19 @@ const serverSchema = z.object({
   FIRETRACE_USE_EMULATORS: z.enum(["true", "false"]).default("false"),
   FIREBASE_AUTH_EMULATOR_HOST: z.string().optional(),
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
+  FIRETRACE_EVAL_BASE_URL: z.string().trim().optional(),
+  FIRETRACE_EVAL_API_KEY: z.string().trim().optional(),
+  FIRETRACE_EVAL_MODEL: z.string().trim().optional(),
 });
+
+/** The OpenAI-compatible endpoint LLM-as-a-judge evaluators call. */
+export interface EvalConfig {
+  /** Origin plus path prefix, e.g. https://api.openai.com/v1; `/chat/completions` is appended. */
+  baseUrl: string;
+  apiKey: string;
+  /** Default model; an evaluator may override it. */
+  model: string;
+}
 
 export interface ServerEnv {
   nodeEnv: "development" | "test" | "production";
@@ -40,6 +52,8 @@ export interface ServerEnv {
   useEmulators: boolean;
   authEmulatorHost: string;
   firestoreEmulatorHost: string;
+  /** Null until all three FIRETRACE_EVAL_* variables are set; evaluators stay disabled. */
+  eval: EvalConfig | null;
 }
 
 export class ConfigError extends Error {
@@ -139,6 +153,27 @@ export function buildServerEnv(
   } catch {
     problems.push("NEXT_PUBLIC_APP_URL must be an absolute URL");
   }
+  const evalValues = [v.FIRETRACE_EVAL_BASE_URL, v.FIRETRACE_EVAL_API_KEY, v.FIRETRACE_EVAL_MODEL];
+  const evalSet = evalValues.filter(Boolean).length;
+  let evalConfig: EvalConfig | null = null;
+  if (evalSet > 0 && evalSet < 3) {
+    problems.push(
+      "FIRETRACE_EVAL_BASE_URL, FIRETRACE_EVAL_API_KEY and FIRETRACE_EVAL_MODEL must be set together (or all left unset)",
+    );
+  } else if (evalSet === 3) {
+    const baseUrl = (v.FIRETRACE_EVAL_BASE_URL as string).replace(/\/+$/, "");
+    if (!/^https?:\/\/./.test(baseUrl) || !URL.canParse(baseUrl)) {
+      problems.push(
+        "FIRETRACE_EVAL_BASE_URL must be an absolute http(s) URL such as https://api.openai.com/v1",
+      );
+    } else {
+      evalConfig = {
+        baseUrl,
+        apiKey: v.FIRETRACE_EVAL_API_KEY as string,
+        model: v.FIRETRACE_EVAL_MODEL as string,
+      };
+    }
+  }
   if (problems.length > 0) return { ok: false, problems };
 
   return {
@@ -157,6 +192,7 @@ export function buildServerEnv(
       useEmulators,
       authEmulatorHost: v.FIREBASE_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099",
       firestoreEmulatorHost: v.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080",
+      eval: evalConfig,
     },
   };
 }

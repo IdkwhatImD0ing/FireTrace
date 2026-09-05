@@ -6,10 +6,10 @@ import type { IngestRequest } from "./schema";
  * the landing preview, the emulator seed, and tests.
  */
 export function sampleTraceRequest(
-  overrides: Partial<{ id: string; name: string }> = {},
+  overrides: Partial<{ id: string; name: string; startedAt: string }> = {},
 ): IngestRequest {
-  const t = (offsetMs: number) =>
-    new Date(Date.parse("2026-09-02T19:01:02.120Z") + offsetMs).toISOString();
+  const base = Date.parse(overrides.startedAt ?? "2026-09-02T19:01:02.120Z");
+  const t = (offsetMs: number) => new Date(base + offsetMs).toISOString();
   return {
     schemaVersion: 1,
     trace: {

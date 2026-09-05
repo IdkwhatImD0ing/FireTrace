@@ -63,15 +63,18 @@ describe("POST /api/mcp (stateless Streamable HTTP) against the emulator", () =>
     const everything = await keyWith(project.id, ["traces:write", "traces:read", "traces:delete"]);
 
     expect(await mcpToolNames(readWrite.plaintext)).toEqual([
+      "add_score",
       "find_spans",
       "get_ingest_schema",
       "get_project",
       "get_trace",
+      "list_scores",
       "list_traces",
       "patch_trace_metadata",
       "record_trace",
     ]);
     expect(await mcpToolNames(writeOnly.plaintext)).toEqual([
+      "add_score",
       "get_ingest_schema",
       "patch_trace_metadata",
       "record_trace",
@@ -80,6 +83,7 @@ describe("POST /api/mcp (stateless Streamable HTTP) against the emulator", () =>
       "find_spans",
       "get_project",
       "get_trace",
+      "list_scores",
       "list_traces",
     ]);
     expect(await mcpToolNames(everything.plaintext)).toContain("delete_trace");
@@ -196,6 +200,49 @@ describe("POST /api/mcp (stateless Streamable HTTP) against the emulator", () =>
     });
     expect(deleted.result?.isError).toBeFalsy();
     expect(await traceData(project.id, body.trace.id)).toBeNull();
+  });
+
+  it("adds and lists scores through the tools", async () => {
+    const project = await createTestProject("scored");
+    const key = await keyWith(project.id, ["traces:write", "traces:read"]);
+    const body = sampleTraceRequest();
+    expect((await postTrace(body, key.plaintext)).status).toBe(201);
+
+    const added = await mcpTool(key.plaintext, "add_score", {
+      traceId: body.trace.id,
+      name: "accuracy",
+      dataType: "numeric",
+      value: 0.9,
+      comment: "cited the right page",
+    });
+    expect(added.result?.isError).toBeFalsy();
+    expect(added.text).toContain("Added score accuracy=0.9");
+    expect(added.result?.structuredContent).toMatchObject({
+      traceId: body.trace.id,
+      name: "accuracy",
+      value: 0.9,
+      source: "api",
+    });
+    expect((await traceData(project.id, body.trace.id))!.scores.accuracy.value).toBe(0.9);
+
+    const wrongType = await mcpTool(key.plaintext, "add_score", {
+      traceId: body.trace.id,
+      name: "accuracy",
+      dataType: "numeric",
+      value: "high",
+    });
+    expect(wrongType.result?.isError ?? wrongType.rpc.error).toBeTruthy();
+
+    const forTrace = await mcpTool(key.plaintext, "list_scores", { traceId: body.trace.id });
+    expect(forTrace.text).toContain("1 score(s)");
+    expect(forTrace.text).toContain("accuracy=0.9");
+    const byName = await mcpTool(key.plaintext, "list_scores", { name: "accuracy" });
+    expect((byName.result?.structuredContent as { scores: unknown[] }).scores).toHaveLength(1);
+    const none = await mcpTool(key.plaintext, "list_scores", { name: "missing" });
+    expect(none.text).toContain("No scores match.");
+
+    const detail = await mcpTool(key.plaintext, "get_trace", { traceId: body.trace.id });
+    expect(detail.text).toContain('"scores"');
   });
 
   it("serves the ingest schema and never crosses projects", async () => {

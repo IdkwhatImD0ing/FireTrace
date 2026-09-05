@@ -1,4 +1,12 @@
-import type { JsonObject, JsonValue, SpanKind, TraceStatus, Usage } from "./schema";
+import type {
+  JsonObject,
+  JsonValue,
+  ScoreDataType,
+  ScoreSource,
+  SpanKind,
+  TraceStatus,
+  Usage,
+} from "./schema";
 import type { KeyScope } from "./scopes";
 
 /** Dashboard-facing models (Timestamps converted to ISO strings for serialization). */
@@ -53,6 +61,8 @@ export interface TraceSummary {
   errorCount: number;
   estimatedBytes: number;
   ingestedAt: string | null;
+  /** Latest score per name; the full history lives in projects/{id}/scores. */
+  scores: Record<string, ScoreSummary>;
 }
 
 export interface TraceDetail extends TraceSummary {
@@ -97,14 +107,69 @@ export interface TraceFilters {
   model?: string;
   sessionId?: string;
   userId?: string;
+  /** Exact trace name. */
+  name?: string;
+  /** One tag the trace must carry. */
+  tag?: string;
   /** ISO timestamps (inclusive). */
   from?: string;
   to?: string;
+}
+
+/**
+ * List orderings. `newest` combines with every filter; `slowest` and
+ * `costliest` only with status, model, name and tag (see queries.ts).
+ */
+export const TRACE_SORTS = ["newest", "slowest", "costliest"] as const;
+export type TraceSort = (typeof TRACE_SORTS)[number];
+
+/** Distinct values seen in recent traces, for filter suggestions. */
+export interface TraceFacets {
+  names: string[];
+  models: string[];
+  tags: string[];
 }
 
 export interface TracePage {
   traces: TraceSummary[];
   nextCursor: string | null;
   prevCursor: string | null;
+  pageSize: number;
+}
+
+export type ScoreValue = number | string | boolean;
+
+/** Denormalized onto the trace document: the newest score for one name. */
+export interface ScoreSummary {
+  scoreId: string;
+  dataType: ScoreDataType;
+  value: ScoreValue;
+  evaluatorId: string | null;
+}
+
+export interface Score {
+  id: string;
+  traceId: string;
+  spanId: string | null;
+  name: string;
+  dataType: ScoreDataType;
+  value: ScoreValue;
+  comment: string | null;
+  source: ScoreSource;
+  evaluatorId: string | null;
+  runId: string | null;
+  createdAt: string;
+}
+
+export interface ScoreFilters {
+  name?: string;
+  /** ISO timestamps (inclusive). */
+  from?: string;
+  to?: string;
+}
+
+export interface ScorePage {
+  scores: Score[];
+  nextCursor: string | null;
   pageSize: number;
 }

@@ -1,5 +1,15 @@
 import { FireTraceError } from "./errors.js";
-import type { JsonObject, JsonValue, SpanKind, TraceStatus, Usage } from "./types.js";
+import type {
+  JsonObject,
+  JsonValue,
+  ScoreDataType,
+  ScoreInput,
+  ScoreSource,
+  ScoreValue,
+  SpanKind,
+  TraceStatus,
+  Usage,
+} from "./types.js";
 
 /**
  * Read/delete client for the key-authenticated REST API (docs/api.md).
@@ -54,6 +64,48 @@ export interface TraceSummary {
   errorCount: number;
   estimatedBytes: number;
   ingestedAt: string | null;
+  /** Newest score per name; `listTraceScores` returns the full history. */
+  scores: Record<string, ScoreSummary>;
+}
+
+export interface ScoreSummary {
+  scoreId: string;
+  dataType: ScoreDataType;
+  value: ScoreValue;
+  evaluatorId: string | null;
+}
+
+export interface Score {
+  id: string;
+  traceId: string;
+  spanId: string | null;
+  name: string;
+  dataType: ScoreDataType;
+  value: ScoreValue;
+  comment: string | null;
+  source: ScoreSource;
+  evaluatorId: string | null;
+  runId: string | null;
+  createdAt: string;
+}
+
+export interface ScorePage {
+  scores: Score[];
+  nextCursor: string | null;
+  pageSize: number;
+}
+
+export interface ListScoresQuery {
+  /** Exact score name. */
+  name?: string;
+  /** Inclusive ISO-8601 lower bound on createdAt. */
+  from?: string;
+  /** Inclusive ISO-8601 upper bound on createdAt. */
+  to?: string;
+  /** 1-500, default 50. */
+  limit?: number;
+  /** nextCursor of a previous page (older scores). */
+  after?: string;
 }
 
 export interface TraceDetail extends TraceSummary {
@@ -104,8 +156,14 @@ export interface TracePage {
 export interface ListTracesQuery {
   status?: TraceStatus;
   model?: string;
+  /** Exact trace name. */
+  name?: string;
+  /** One tag the trace must carry. */
+  tag?: string;
   sessionId?: string;
   userId?: string;
+  /** newest (default), slowest or costliest; the latter two only with status/model/name/tag. */
+  sort?: "newest" | "slowest" | "costliest";
   /** Inclusive ISO-8601 lower bound on startedAt. */
   from?: string;
   /** Inclusive ISO-8601 upper bound on startedAt. */
@@ -168,10 +226,12 @@ export class FireTraceApi {
     }
   }
 
-  /** One trace with all spans, or null when it does not exist (scope traces:read). */
-  async getTrace(traceId: string): Promise<{ trace: TraceDetail; spans: SpanDetail[] } | null> {
+  /** One trace with all spans and scores, or null when it does not exist (scope traces:read). */
+  async getTrace(
+    traceId: string,
+  ): Promise<{ trace: TraceDetail; spans: SpanDetail[]; scores: Score[] } | null> {
     try {
-      return await this.request<{ trace: TraceDetail; spans: SpanDetail[] }>(
+      return await this.request<{ trace: TraceDetail; spans: SpanDetail[]; scores: Score[] }>(
         "GET",
         `/api/v1/traces/${encodeURIComponent(traceId)}`,
       );
@@ -179,6 +239,49 @@ export class FireTraceApi {
       if (err instanceof FireTraceError && err.status === 404) return null;
       throw err;
     }
+  }
+
+  /**
+   * Attach a score to a stored trace (scope traces:write): a rating, a
+   * reviewer's verdict, an eval result. Scores are append-only and indexed,
+   * so unlike metadata they can be listed and filtered afterwards. Adding a
+   * name again records a newer score; the trace's `scores` summary keeps the
+   * newest per name.
+   */
+  async addScore(traceId: string, input: ScoreInput): Promise<Score> {
+    const res = await this.request<{ score: Score }>(
+      "POST",
+      `/api/v1/traces/${encodeURIComponent(traceId)}/scores`,
+      input,
+    );
+    return res.score;
+  }
+
+  /** Every score of one trace, newest first (scope traces:read). */
+  async listTraceScores(traceId: string): Promise<Score[]> {
+    const res = await this.request<{ scores: Score[] }>(
+      "GET",
+      `/api/v1/traces/${encodeURIComponent(traceId)}/scores`,
+    );
+    return res.scores;
+  }
+
+  /** Newest-first page of scores across the project (scope traces:read). */
+  listScores(query: ListScoresQuery = {}): Promise<ScorePage> {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null && v !== "") sp.set(k, String(v));
+    }
+    const qs = sp.toString();
+    return this.request<ScorePage>("GET", `/api/v1/scores${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Delete one score (scope traces:delete). */
+  async deleteScore(traceId: string, scoreId: string): Promise<void> {
+    await this.request(
+      "DELETE",
+      `/api/v1/traces/${encodeURIComponent(traceId)}/scores/${encodeURIComponent(scoreId)}`,
+    );
   }
 
   /**

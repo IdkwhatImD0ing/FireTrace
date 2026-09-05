@@ -71,7 +71,7 @@ STEPS
    Tell me to store the pepper somewhere safe (it is in .env.local): changing it later invalidates every API key.
    NEXT_PUBLIC_APP_URL=http://localhost:3000
    FIRETRACE_USE_EMULATORS=false and NEXT_PUBLIC_FIRETRACE_USE_EMULATORS=false
-   Leave FIRETRACE_STORAGE_LIMIT_BYTES unset (optional storage-warning allowance in bytes; the default is the 1 GiB free tier). Leave FIRETRACE_TRIAL_TRACE_LIMIT unset unless I say I want strangers to be able to sign in and try a few traces on my instance.
+   Leave FIRETRACE_STORAGE_LIMIT_BYTES unset (optional storage-warning allowance in bytes; the default is the 1 GiB free tier). Leave FIRETRACE_TRIAL_TRACE_LIMIT unset unless I say I want strangers to be able to sign in and try a few traces on my instance. Leave FIRETRACE_EVAL_BASE_URL, FIRETRACE_EVAL_API_KEY and FIRETRACE_EVAL_MODEL unset unless I say I want LLM-as-a-judge evaluators; they point at any OpenAI-compatible chat-completions endpoint and are set all together or not at all.
    Then verify locally: start `pnpm dev` in the background, GET http://localhost:3000/api/health (curl on macOS/Linux; Invoke-RestMethod on PowerShell) and confirm firebaseConfigured, authConfigured, and ingestConfigured are all true (the response lists any problems outside production). If port 3000 is busy, use `pnpm exec next dev --port 3001` and adjust the URL. Afterwards stop the dev server and make sure nothing still listens on the port: macOS/Linux `lsof -ti :3000 | xargs kill`; PowerShell `Get-NetTCPConnection -LocalPort 3000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`.
 
 9. Create the Vercel project and set its environment variables (Production environment).

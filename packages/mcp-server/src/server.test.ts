@@ -3,8 +3,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import {
   BackendError,
+  type ListScoresQuery,
   type ListTracesQuery,
   type ProjectLike,
+  type ScoreInputLike,
+  type ScoreLike,
   type TraceBackend,
   type TraceDetailLike,
 } from "./backend.ts";
@@ -107,6 +110,33 @@ class FakeBackend implements TraceBackend {
     if (traceId !== TRACE_ID) throw new BackendError(404, "not_found", "Trace not found.");
     this.deleted.push(traceId);
   }
+  scores: ScoreLike[] = [];
+  async addScore(traceId: string, input: ScoreInputLike) {
+    this.calls.push(["addScore", { traceId, ...input }]);
+    if (traceId !== TRACE_ID) throw new BackendError(404, "not_found", "Trace not found.");
+    const score: ScoreLike = {
+      id: "0123456789abcdef",
+      traceId,
+      name: input.name,
+      dataType: input.dataType,
+      value: input.value,
+      comment: input.comment ?? null,
+      source: "api",
+      createdAt: "2026-09-03T10:00:03.000Z",
+    };
+    this.scores.push(score);
+    return score;
+  }
+  async listScores(query: ListScoresQuery) {
+    this.calls.push(["listScores", query]);
+    return {
+      scores: this.scores.filter(
+        (s) =>
+          (!query.traceId || s.traceId === query.traceId) && (!query.name || s.name === query.name),
+      ),
+      nextCursor: null,
+    };
+  }
   async ingestSchema() {
     return { type: "object", properties: { schemaVersion: { const: 1 } } };
   }
@@ -132,11 +162,13 @@ describe("createFireTraceMcpServer", () => {
     const all = await connect(new FakeBackend(["traces:write", "traces:read", "traces:delete"]));
     const names = (await all.client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      "add_score",
       "delete_trace",
       "find_spans",
       "get_ingest_schema",
       "get_project",
       "get_trace",
+      "list_scores",
       "list_traces",
       "patch_trace_metadata",
       "record_trace",
@@ -148,6 +180,7 @@ describe("createFireTraceMcpServer", () => {
       "find_spans",
       "get_project",
       "get_trace",
+      "list_scores",
       "list_traces",
     ]);
     await readOnly.client.close();
@@ -258,6 +291,60 @@ describe("createFireTraceMcpServer", () => {
     expect(textOf(bad)).toContain("invalid_trace (HTTP 400): spans required");
     const schema = await client.callTool({ name: "get_ingest_schema", arguments: {} });
     expect(textOf(schema)).toContain('"schemaVersion"');
+    await client.close();
+  });
+
+  it("add_score stores a judgement that list_scores reads back", async () => {
+    const backend = new FakeBackend(["traces:write", "traces:read"]);
+    const { client } = await connect(backend);
+    const added = await client.callTool({
+      name: "add_score",
+      arguments: {
+        traceId: TRACE_ID.toUpperCase(),
+        name: "accuracy",
+        dataType: "numeric",
+        value: 0.9,
+        comment: "cited the right page",
+      },
+    });
+    expect(added.isError).toBeFalsy();
+    expect(textOf(added)).toContain("Added score accuracy=0.9");
+    expect(backend.calls[0]).toEqual([
+      "addScore",
+      {
+        traceId: TRACE_ID,
+        name: "accuracy",
+        dataType: "numeric",
+        value: 0.9,
+        comment: "cited the right page",
+      },
+    ]);
+    expect(added.structuredContent).toMatchObject({ name: "accuracy", value: 0.9 });
+
+    const badName = await client.callTool({
+      name: "add_score",
+      arguments: { traceId: TRACE_ID, name: "has.dot", dataType: "boolean", value: true },
+    });
+    expect(badName.isError).toBe(true);
+
+    const missing = await client.callTool({
+      name: "add_score",
+      arguments: { traceId: "f".repeat(32), name: "accuracy", dataType: "boolean", value: true },
+    });
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing)).toContain("not_found");
+
+    const listed = await client.callTool({
+      name: "list_scores",
+      arguments: { traceId: TRACE_ID },
+    });
+    expect(textOf(listed)).toContain("1 score(s)");
+    expect(textOf(listed)).toContain("accuracy=0.9");
+    expect(textOf(listed)).toContain("cited the right page");
+    expect(backend.calls.at(-1)).toEqual(["listScores", { traceId: TRACE_ID, limit: 50 }]);
+
+    const none = await client.callTool({ name: "list_scores", arguments: { name: "other" } });
+    expect(textOf(none)).toContain("No scores match.");
     await client.close();
   });
 

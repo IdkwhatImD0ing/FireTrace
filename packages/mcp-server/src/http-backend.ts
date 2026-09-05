@@ -1,9 +1,13 @@
 import {
   BackendError,
+  type ListScoresQuery,
   type ListTracesQuery,
   type MetadataPatchResult,
   type ProjectLike,
   type RecordResult,
+  type ScoreInputLike,
+  type ScoreLike,
+  type ScorePageLike,
   type TraceBackend,
   type TraceDetailLike,
   type TracePageLike,
@@ -101,6 +105,32 @@ export class HttpBackend implements TraceBackend {
 
   async deleteTrace(traceId: string): Promise<void> {
     await this.request("DELETE", `/api/v1/traces/${traceId}`);
+  }
+
+  async addScore(traceId: string, input: ScoreInputLike): Promise<ScoreLike> {
+    const res = await this.request<{ score: ScoreLike }>(
+      "POST",
+      `/api/v1/traces/${traceId}/scores`,
+      input,
+    );
+    return res.score;
+  }
+
+  async listScores(query: ListScoresQuery): Promise<ScorePageLike> {
+    if (query.traceId) {
+      const res = await this.request<{ scores: ScoreLike[] }>(
+        "GET",
+        `/api/v1/traces/${query.traceId}/scores`,
+      );
+      const scores = query.name ? res.scores.filter((s) => s.name === query.name) : res.scores;
+      return { scores, nextCursor: null };
+    }
+    const sp = new URLSearchParams();
+    if (query.name) sp.set("name", query.name);
+    if (query.limit) sp.set("limit", String(query.limit));
+    if (query.cursor) sp.set("after", query.cursor);
+    const qs = sp.toString();
+    return this.request<ScorePageLike>("GET", `/api/v1/scores${qs ? `?${qs}` : ""}`);
   }
 
   async ingestSchema(): Promise<unknown> {
