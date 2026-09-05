@@ -16,7 +16,6 @@ import { ApiError } from "@/lib/firetrace/errors";
 import { isProjectId, isTraceId } from "@/lib/firetrace/ids";
 import {
   cursorFor,
-  getTrace,
   listSpans,
   listTraces,
   parseTraceFilters,
@@ -25,7 +24,7 @@ import {
 } from "@/lib/firetrace/queries";
 import { listScoresForTrace } from "@/lib/firetrace/scores";
 import type { TraceDetail, TraceFilters, TraceSort } from "@/lib/firetrace/types";
-import { getAccessibleProject } from "@/lib/auth/access";
+import { getAccessibleProject, getAccessibleTrace } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 import {
   formatCost,
@@ -90,8 +89,9 @@ export default async function TracePage({
   if (!project) notFound();
   const isOwner = owner.role === "owner";
   // Everything below needs only the authorized project, so it is one round trip.
+  // The trace read is shared with the layout, which already 404s when it is missing.
   const [trace, spans, scores, evaluators, view] = await Promise.all([
-    getTrace(db, projectId, traceId),
+    getAccessibleTrace(db, owner, projectId, traceId),
     listSpans(db, projectId, traceId),
     listScoresForTrace(db, projectId, traceId),
     isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
