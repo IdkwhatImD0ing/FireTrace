@@ -2,6 +2,7 @@ import "server-only";
 import type { DecodedIdToken } from "firebase-admin/auth";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { serverEnv, type ServerEnv } from "@/lib/env/server";
 import { adminAuth } from "@/lib/firebase/admin";
 import { ApiError } from "@/lib/firetrace/errors";
@@ -114,11 +115,15 @@ export async function verifySessionCookieValue(value: string | undefined): Promi
   }
 }
 
-/** Current owner from the request cookies, or null. Safe to call in layouts. */
-export async function getOwner(): Promise<Owner | null> {
+/**
+ * Current owner from the request cookies, or null. Safe to call in layouts.
+ * Memoized per request: layouts and the page share one verification
+ * (revocation check included) instead of each repeating it.
+ */
+export const getOwner = cache(async (): Promise<Owner | null> => {
   const store = await cookies();
   return verifySessionCookieValue(store.get(SESSION_COOKIE)?.value);
-}
+});
 
 /** Owner or a 401 ApiError. Use in route handlers and server actions. */
 export async function requireOwner(): Promise<Owner> {

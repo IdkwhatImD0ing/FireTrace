@@ -1,12 +1,9 @@
 import Link from "next/link";
-import { DEFAULT_REPOSITORY_URL } from "@/lib/env/server";
+import { publicRepositoryUrl } from "@/lib/env/server";
 import { DOC_GROUPS, DOCS } from "@/lib/docs/registry";
 
 export default function DocsIndexPage() {
-  const repoUrl = (process.env.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL).replace(
-    /\/+$/,
-    "",
-  );
+  const repoUrl = publicRepositoryUrl();
   return (
     <div className="space-y-10">
       <div>

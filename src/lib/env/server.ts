@@ -9,6 +9,11 @@ import { z } from "zod";
 const GIB = 1024 * 1024 * 1024;
 export const DEFAULT_REPOSITORY_URL = "https://github.com/IdkwhatImD0ing/FireTrace";
 
+/** Repository link for public pages: works without the rest of the config, tolerates a trailing slash. */
+export function publicRepositoryUrl(): string {
+  return (process.env.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL).replace(/\/+$/, "");
+}
+
 const serverSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   NEXT_PUBLIC_FIREBASE_PROJECT_ID: z.string().min(1),
@@ -227,9 +232,10 @@ export function configStatus(): {
   emulators: boolean;
   problems: string[];
 } {
-  const result = buildServerEnv(process.env);
+  // A cached env means the build already succeeded; skip re-parsing and re-decoding the credential.
+  const result = cached ? null : buildServerEnv(process.env);
   const emulators = process.env.FIRETRACE_USE_EMULATORS === "true";
-  if (result.ok) {
+  if (!result || result.ok) {
     return {
       firebaseConfigured: true,
       authConfigured: true,

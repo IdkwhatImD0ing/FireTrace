@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { Brand } from "@/components/Brand";
 import { DocsNav } from "@/components/docs/DocsNav";
 import { getOwner } from "@/lib/auth/session";
-import { DEFAULT_REPOSITORY_URL } from "@/lib/env/server";
+import { publicRepositoryUrl } from "@/lib/env/server";
 
 export const metadata: Metadata = {
   title: { default: "Docs", template: "%s · FireTrace docs" },
@@ -19,10 +19,7 @@ export const dynamic = "force-dynamic";
 
 /** Public documentation shell: no session required, rendered from docs/*.md. */
 export default async function DocsLayout({ children }: { children: ReactNode }) {
-  const repoUrl = (process.env.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL).replace(
-    /\/+$/,
-    "",
-  );
+  const repoUrl = publicRepositoryUrl();
   const owner = await getOwner();
   return (
     <div className="flex min-h-screen flex-col">

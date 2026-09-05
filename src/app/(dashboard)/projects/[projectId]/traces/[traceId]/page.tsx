@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { DeleteTraceButton } from "@/components/trace/DeleteTraceButton";
 import { RunEvaluatorButton } from "@/components/trace/RunEvaluatorButton";
@@ -14,7 +15,6 @@ import { ApiError } from "@/lib/firetrace/errors";
 import { isProjectId, isTraceId } from "@/lib/firetrace/ids";
 import {
   cursorFor,
-  getTrace,
   listSpans,
   listTraces,
   parseTraceFilters,
@@ -22,7 +22,8 @@ import {
   traceListQuery,
 } from "@/lib/firetrace/queries";
 import { listScoresForTrace } from "@/lib/firetrace/scores";
-import { getAccessibleProject } from "@/lib/auth/access";
+import type { TraceDetail, TraceFilters, TraceSort } from "@/lib/firetrace/types";
+import { getAccessibleProject, getAccessibleTrace } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 import {
   formatCost,
@@ -35,6 +36,41 @@ import {
 export const metadata: Metadata = { title: "Trace" };
 /** "Run evaluator" is a server action on this route; the judge may take a while. */
 export const maxDuration = 300;
+
+/**
+ * Newer / older links in the list's current order. Streams in after the rest
+ * of the page (two more list queries), rendering disabled until then.
+ */
+async function TraceNeighbours({
+  projectId,
+  trace,
+  filters,
+  sort,
+  listQuery,
+}: {
+  projectId: string;
+  trace: TraceDetail;
+  filters: TraceFilters;
+  sort: TraceSort;
+  listQuery: string;
+}) {
+  const db = adminDb();
+  let older: string | null = null;
+  let newer: string | null = null;
+  try {
+    const [after, before] = await Promise.all([
+      listTraces(db, projectId, filters, { after: cursorFor(trace, sort), limit: 1, sort }),
+      listTraces(db, projectId, filters, { before: cursorFor(trace, sort), limit: 1, sort }),
+    ]);
+    older = after.traces[0]?.id ?? null;
+    newer = before.traces[0]?.id ?? null;
+  } catch (err) {
+    if (!(err instanceof ApiError)) throw err;
+  }
+  const href = (id: string | null) =>
+    id ? `/projects/${projectId}/traces/${id}${listQuery}` : null;
+  return <TraceNav newerHref={href(newer)} olderHref={href(older)} />;
+}
 
 export default async function TracePage({
   params,
@@ -51,28 +87,16 @@ export default async function TracePage({
   const db = adminDb();
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
-  const trace = await getTrace(db, projectId, traceId);
-  if (!trace) notFound();
   const isOwner = owner.role === "owner";
-  const neighbours = async () => {
-    try {
-      const [older, newer] = await Promise.all([
-        listTraces(db, projectId, filters, { after: cursorFor(trace, sort), limit: 1, sort }),
-        listTraces(db, projectId, filters, { before: cursorFor(trace, sort), limit: 1, sort }),
-      ]);
-      return { older: older.traces[0]?.id ?? null, newer: newer.traces[0]?.id ?? null };
-    } catch (err) {
-      if (err instanceof ApiError) return { older: null, newer: null };
-      throw err;
-    }
-  };
-  const [spans, scores, evaluators, next] = await Promise.all([
+  // Everything below needs only the authorized project, so it is one round trip.
+  // The trace read is shared with the layout, which already 404s when it is missing.
+  const [trace, spans, scores, evaluators] = await Promise.all([
+    getAccessibleTrace(db, owner, projectId, traceId),
     listSpans(db, projectId, traceId),
     listScoresForTrace(db, projectId, traceId),
     isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
-    neighbours(),
   ]);
-  const traceHref = (id: string) => `/projects/${projectId}/traces/${id}${listQuery}`;
+  if (!trace) notFound();
   const evalConfigured = serverEnv().eval !== null;
 
   return (
@@ -89,10 +113,15 @@ export default async function TracePage({
             {trace.name}
           </h1>
           <div className="flex flex-wrap items-center gap-2">
-            <TraceNav
-              newerHref={next.newer ? traceHref(next.newer) : null}
-              olderHref={next.older ? traceHref(next.older) : null}
-            />
+            <Suspense fallback={<TraceNav newerHref={null} olderHref={null} />}>
+              <TraceNeighbours
+                projectId={projectId}
+                trace={trace}
+                filters={filters}
+                sort={sort}
+                listQuery={listQuery}
+              />
+            </Suspense>
             <DeleteTraceButton projectId={projectId} traceId={traceId} traceName={trace.name} />
           </div>
         </div>

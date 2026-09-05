@@ -24,13 +24,13 @@ import type {
 
 /** Firestore document -> plain, serializable dashboard models. Defensive on shape. */
 
-function iso(v: unknown): string | null {
+export function iso(v: unknown): string | null {
   if (v instanceof Timestamp) return v.toDate().toISOString();
   if (v instanceof Date) return v.toISOString();
   return null;
 }
 
-function str(v: unknown): string | null {
+export function str(v: unknown): string | null {
   return typeof v === "string" ? v : null;
 }
 

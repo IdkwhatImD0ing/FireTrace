@@ -182,7 +182,7 @@ export function buildStats(
     string,
     { traces: number; errors: number; durationMsSum: number; hist: Record<string, number> }
   >();
-  const models = new Map<string, ModelRow & { key: string }>();
+  const models = new Map<string, ModelRow>();
   const scores = new Map<string, { count: number; sum: number; values: Map<string, number> }>();
 
   for (const doc of docs.map((d) => d.data)) {
@@ -201,7 +201,6 @@ export function buildStats(
     }
     for (const [key, row] of Object.entries(doc.byModel ?? {})) {
       const entry = models.get(key) ?? {
-        key,
         model: decodeKey(key),
         traces: 0,
         inputTokens: 0,

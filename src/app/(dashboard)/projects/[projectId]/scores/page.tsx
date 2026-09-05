@@ -9,22 +9,12 @@ import { isProjectId } from "@/lib/firetrace/ids";
 import { listScores, parseScoreFilters, summarizeScores } from "@/lib/firetrace/scores";
 import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
+import { firstParam, withParams } from "@/lib/search-params";
 
 export const metadata: Metadata = { title: "Scores" };
 
 /** Enough for a per-name summary without a rollup; the table pages beyond it. */
 const PAGE_SIZE = 200;
-
-function first(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v;
-}
-
-function withParams(base: string, params: Record<string, string | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
-  const qs = search.toString();
-  return qs ? `${base}?${qs}` : base;
-}
 
 export default async function ProjectScoresPage({
   params,
@@ -40,7 +30,7 @@ export default async function ProjectScoresPage({
 
   const filters = parseScoreFilters(sp);
   const page = await listScores(db, projectId, filters, {
-    after: first(sp.after),
+    after: firstParam(sp.after),
     limit: PAGE_SIZE,
   });
   const summaries = summarizeScores(page.scores);

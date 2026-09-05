@@ -86,9 +86,11 @@ async function loadTrace(
   projectId: string,
   traceId: string,
 ): Promise<{ trace: TraceDetail; spans: SpanDetail[] }> {
-  const trace = await getTrace(db, projectId, traceId);
+  const [trace, spans] = await Promise.all([
+    getTrace(db, projectId, traceId),
+    listSpans(db, projectId, traceId),
+  ]);
   if (!trace) throw new ApiError(404, "not_found", "Trace not found.");
-  const spans = await listSpans(db, projectId, traceId);
   return { trace, spans };
 }
 

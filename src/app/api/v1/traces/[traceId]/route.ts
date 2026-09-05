@@ -1,9 +1,8 @@
-import { traceIdParam, withApiKey } from "@/lib/firetrace/api-handler";
+import { readJsonBody, traceIdParam, withApiKey } from "@/lib/firetrace/api-handler";
 import { ApiError, jsonResponse } from "@/lib/firetrace/errors";
 import { normalizeMetadataPatch, patchTraceMetadata } from "@/lib/firetrace/metadata";
 import { deleteTrace } from "@/lib/firetrace/projects";
 import { getTrace, listSpans } from "@/lib/firetrace/queries";
-import { LIMITS } from "@/lib/firetrace/schema";
 import { listScoresForTrace } from "@/lib/firetrace/scores";
 import { log } from "@/lib/log";
 
@@ -30,24 +29,7 @@ export const PATCH = withApiKey(
   "traces:write",
   async ({ db, auth, requestId, params }, request) => {
     const traceId = traceIdParam(params);
-    const tooLarge = () =>
-      new ApiError(
-        413,
-        "payload_too_large",
-        `Request body exceeds ${LIMITS.maxRequestBytes} bytes.`,
-      );
-    if (Number(request.headers.get("content-length") ?? "0") > LIMITS.maxRequestBytes) {
-      throw tooLarge();
-    }
-    const text = await request.text();
-    if (Buffer.byteLength(text, "utf8") > LIMITS.maxRequestBytes) throw tooLarge();
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      throw new ApiError(400, "invalid_json", "Request body must be valid JSON.");
-    }
-
+    const body = await readJsonBody(request);
     const normalized = normalizeMetadataPatch(body);
     if (!normalized.ok) {
       throw new ApiError(400, normalized.error.code, normalized.error.message);

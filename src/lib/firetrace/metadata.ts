@@ -1,6 +1,6 @@
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { z } from "zod";
-import { ApiError, isQuotaExhausted } from "./errors";
+import { ApiError, rethrowQuotaExhausted } from "./errors";
 import { canonicalJson } from "./hash";
 import { firestoreSizeEstimate, validateJsonShape } from "./json-shape";
 import { byteLength } from "./normalize";
@@ -109,13 +109,6 @@ export async function patchTraceMetadata(
       return { metadata: merged, changed: true };
     });
   } catch (err) {
-    if (isQuotaExhausted(err)) {
-      throw new ApiError(
-        429,
-        "quota_exhausted",
-        "Firestore refused the write because a quota is exhausted. Existing data is preserved; free space or upgrade the Firebase plan.",
-      );
-    }
-    throw err;
+    rethrowQuotaExhausted(err);
   }
 }

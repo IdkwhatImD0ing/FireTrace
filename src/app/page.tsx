@@ -5,12 +5,19 @@ import { normalizeIngestBody } from "@/lib/firetrace/normalize";
 import { sampleTraceRequest } from "@/lib/firetrace/sample";
 import type { SpanDetail, TraceDetail } from "@/lib/firetrace/types";
 import { getOwner } from "@/lib/auth/session";
-import { trialTraceLimitFromEnv } from "@/lib/env/server";
+import { publicRepositoryUrl, trialTraceLimitFromEnv } from "@/lib/env/server";
 
-const REPO_URL =
-  process.env.NEXT_PUBLIC_REPOSITORY_URL ?? "https://github.com/IdkwhatImD0ing/FireTrace";
+const REPO_URL = publicRepositoryUrl();
 
-function previewData(): { trace: TraceDetail; spans: SpanDetail[] } {
+type Preview = { trace: TraceDetail; spans: SpanDetail[] };
+
+/** The sample is a constant: normalize and hash it once per process, not per request. */
+let preview: Preview | undefined;
+function previewData(): Preview {
+  return (preview ??= buildPreview());
+}
+
+function buildPreview(): Preview {
   const normalized = normalizeIngestBody(sampleTraceRequest());
   if (!normalized.ok) throw new Error("sample trace is invalid");
   const { trace, spans, bodyHash, estimatedBytes } = normalized.value;

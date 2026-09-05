@@ -1,13 +1,12 @@
 import { BarChart } from "@/components/stats/BarChart";
-import { adminDb } from "@/lib/firebase/admin";
-import { getProjectStats } from "@/lib/firetrace/stats";
+import type { ProjectStats } from "@/lib/firetrace/stats";
 
 /**
  * Traces per day for the last two weeks above the list, from the dashboard's
- * rollups (14 document reads). Each bar links to the list filtered to that day.
+ * rollups (the page loads them together with the list). Each bar links to the
+ * list filtered to that day.
  */
-export async function TraceHistogram({ projectId }: { projectId: string }) {
-  const stats = await getProjectStats(adminDb(), projectId, "14d");
+export function TraceHistogram({ projectId, stats }: { projectId: string; stats: ProjectStats }) {
   if (stats.days === 0) return null;
   return (
     <BarChart

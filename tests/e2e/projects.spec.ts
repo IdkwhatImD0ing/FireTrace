@@ -98,10 +98,10 @@ test("traces sent with each key appear only in their own project", async () => {
   await expect(page.getByRole("link", { name: "alpha-run" })).toHaveCount(0);
 
   // A trace id that lives in beta is not reachable through alpha's URL space. The
-  // dashboard streams its shell behind a loading boundary, so the HTTP status may
-  // already be 200 when notFound() runs; the rendered 404 view is the contract.
+  // trace layout checks existence above every loading boundary, so this is a
+  // real 404 status, not a streamed 404 view under a 200.
   const cross = await page.goto(`/projects/${alphaId}/traces/${BETA_TRACE}`);
-  expect([200, 404]).toContain(cross?.status());
+  expect(cross?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "Nothing recorded here." })).toBeVisible();
   await expect(page.getByText("beta-run")).toHaveCount(0);
 
@@ -187,7 +187,7 @@ test("deleting a trace asks for confirmation, then removes it", async () => {
   await expect(page.getByRole("link", { name: "alpha-run" })).toHaveCount(0);
   await expect(page.getByText("No traces recorded yet.")).toBeVisible();
   const gone = await page.goto(`/projects/${alphaId}/traces/${ALPHA_TRACE}`);
-  expect([200, 404]).toContain(gone?.status());
+  expect(gone?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "Nothing recorded here." })).toBeVisible();
 });
 
@@ -209,6 +209,6 @@ test("deleting a project requires typing its exact name", async () => {
   await expect(page.getByRole("link", { name: betaName, exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: alphaName, exact: true })).toBeVisible();
   const gone = await page.goto(`/projects/${betaId}`);
-  expect([200, 404]).toContain(gone?.status());
+  expect(gone?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "Nothing recorded here." })).toBeVisible();
 });

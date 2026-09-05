@@ -21,7 +21,6 @@ export const EVAL_LIMITS = {
 } as const;
 
 export const PROMPT_VARIABLES = ["input", "output", "metadata", "name", "spans"] as const;
-export type PromptVariable = (typeof PROMPT_VARIABLES)[number];
 
 const numericOutput = z
   .strictObject({ kind: z.literal("numeric"), min: z.number(), max: z.number() })

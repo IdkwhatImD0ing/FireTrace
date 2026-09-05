@@ -161,16 +161,24 @@ const spanSchema = {
   },
 } as const;
 
+let ingestJsonSchema: Record<string, unknown> | undefined;
+
+/** JSON Schema of the ingest body; derived once, the input schema is a constant. */
 export function ingestRequestJsonSchema(): Record<string, unknown> {
+  if (ingestJsonSchema) return ingestJsonSchema;
   try {
-    return z.toJSONSchema(ingestRequestSchema, {
+    ingestJsonSchema = z.toJSONSchema(ingestRequestSchema, {
       io: "input",
       target: "draft-2020-12",
       unrepresentable: "any",
     }) as Record<string, unknown>;
   } catch {
-    return { type: "object", description: "See docs/ingestion-api.md for the full schema." };
+    ingestJsonSchema = {
+      type: "object",
+      description: "See docs/ingestion-api.md for the full schema.",
+    };
   }
+  return ingestJsonSchema;
 }
 
 const bearer = [{ apiKey: [] }];
@@ -186,16 +194,16 @@ const errorRef = {
 const errorResponses = {
   "401": {
     description: "Missing, invalid, revoked, or expired API key",
-    content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+    ...errorRef,
   },
   "403": {
     description:
       "The key lacks the required scope, or (on instances with trial mode) the account has used its trial traces (trial_limit_reached)",
-    content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+    ...errorRef,
   },
   "500": {
     description: "Unexpected error or unconfigured deployment (includes a requestId)",
-    content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+    ...errorRef,
   },
 };
 
@@ -374,19 +382,19 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
             },
             "400": {
               description: "Invalid JSON or schema violation",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             "409": {
               description: "Trace id reused with different content",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             "413": {
               description: "Body or document too large",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             "429": {
               description: "Firestore quota exhausted; nothing written",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             ...errorResponses,
           },
@@ -461,7 +469,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
             },
             "400": {
               description: "Invalid cursor or parameter",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             ...errorResponses,
           },
@@ -510,7 +518,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
             },
             "404": {
               description: "No such trace in this project",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             ...errorResponses,
           },
@@ -537,19 +545,19 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
             },
             "400": {
               description: "Invalid JSON, a field other than metadata, or a key Firestore refuses",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             "404": {
               description: "No such trace in this project",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             "413": {
               description: "Request over 2 MiB, or the merged document over the per-document limit",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             "429": {
               description: "Firestore quota exhausted; nothing written",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             ...errorResponses,
           },
@@ -573,7 +581,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
             },
             "404": {
               description: "No such trace in this project",
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+              ...errorRef,
             },
             ...errorResponses,
           },

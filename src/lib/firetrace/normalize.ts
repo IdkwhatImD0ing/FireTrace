@@ -160,6 +160,7 @@ export function normalizeIngestBody(body: unknown): NormalizeResult {
     return invalid("trace.endedAt cannot precede trace.startedAt");
   }
 
+  const ids = new Set(input.spans.map((s) => s.id));
   const seen = new Set<string>();
   for (const span of input.spans) {
     if (seen.has(span.id)) return invalid(`duplicate span id "${span.id}"`);
@@ -170,7 +171,7 @@ export function normalizeIngestBody(body: unknown): NormalizeResult {
     if (span.parentSpanId === span.id) {
       return invalid(`span "${span.id}" cannot be its own parent`);
     }
-    if (span.parentSpanId && !input.spans.some((s) => s.id === span.parentSpanId)) {
+    if (span.parentSpanId && !ids.has(span.parentSpanId)) {
       return invalid(`span "${span.id}" references unknown parentSpanId "${span.parentSpanId}"`);
     }
     for (const event of span.events) {

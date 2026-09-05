@@ -68,15 +68,15 @@ test("the owner's project, trace, and export are invisible to the trial user", a
   await expect(guest.getByRole("link", { name: /owner-private/ })).toHaveCount(0);
   await expect(guest.getByText(OWNER.email)).toHaveCount(0);
 
-  // The dashboard streams a 404 view; the response status may be 200 because
-  // of the loading boundary, so assert the rendered page and its content.
+  // The project and trace layouts check access above every loading boundary,
+  // so these are real 404 statuses; the rendered view and its content matter too.
   const project = await guest.goto(`/projects/${ownerProjectId}`);
-  expect([200, 404]).toContain(project?.status() ?? 0);
+  expect(project?.status()).toBe(404);
   await expect(guest.getByRole("heading", { name: "Nothing recorded here." })).toBeVisible();
   expect(await guest.content()).not.toContain("owner-private");
 
   const trace = await guest.goto(`/projects/${ownerProjectId}/traces/${OWNER_TRACE}`);
-  expect([200, 404]).toContain(trace?.status() ?? 0);
+  expect(trace?.status()).toBe(404);
   await expect(guest.getByRole("heading", { name: "Nothing recorded here." })).toBeVisible();
   expect(await guest.content()).not.toContain("owner-secret-run");
 
