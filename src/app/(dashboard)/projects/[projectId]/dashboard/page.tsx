@@ -7,6 +7,7 @@ import { RangePicker } from "@/components/stats/RangePicker";
 import { StatCard } from "@/components/stats/StatCard";
 import { ModelTable, NameTable, ScoreStatsTable } from "@/components/stats/StatsTables";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { getEnvironmentView } from "@/lib/environment-selection";
 import { adminDb } from "@/lib/firebase/admin";
 import { isProjectId } from "@/lib/firetrace/ids";
 import { getProjectStats, parseRange } from "@/lib/firetrace/stats";
@@ -27,7 +28,10 @@ export default async function ProjectDashboardPage({
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
   const range = parseRange((await searchParams).range);
-  const stats = await getProjectStats(db, projectId, range);
+  // Every number on this page reads the rollups of the selected environment.
+  const view = await getEnvironmentView(db, projectId);
+  const stats = await getProjectStats(db, projectId, range, view.filter);
+  const scopeLabel = view.filter ? view.selection : "all environments";
   const base = `/projects/${projectId}/dashboard`;
   const backfill = `pnpm exec tsx scripts/backfill-stats.ts --project ${projectId} --apply`;
   const { totals } = stats;
@@ -44,7 +48,8 @@ export default async function ProjectDashboardPage({
           </Link>
           <h1 className="mt-1 font-display text-5xl leading-none text-ink">Dashboard</h1>
           <p className="mt-2 font-mono text-[11px] text-ink-3">
-            UTC {stats.hourly ? "hours" : "days"} · rolled up at ingest · {stats.days} day
+            <span className={view.filter ? "text-ember-2" : undefined}>{scopeLabel}</span> · UTC{" "}
+            {stats.hourly ? "hours" : "days"} · rolled up at ingest · {stats.days} day
             {stats.days === 1 ? "" : "s"} with data in range
           </p>
         </div>
@@ -62,11 +67,14 @@ export default async function ProjectDashboardPage({
         </EmptyState>
       ) : stats.days === 0 ? (
         <div className="card space-y-3 p-5">
-          <h2 className="font-display text-2xl text-ink">No rollups for this range.</h2>
+          <h2 className="font-display text-2xl text-ink">
+            No {view.filter ? `${view.selection} ` : ""}rollups for this range.
+          </h2>
           <p className="max-w-2xl text-sm text-ink-2">
-            Charts read per-day rollups that FireTrace writes as traces arrive. Traces recorded
-            before the dashboard existed have none, so either pick a wider range or rebuild the
-            rollups once from the stored traces (read-only for traces; safe to repeat):
+            Charts read per-day rollups, one set per environment, that FireTrace writes as traces
+            arrive. Traces recorded before the dashboard or before environments existed have none,
+            so either pick a wider range or rebuild the rollups once from the stored traces
+            (read-only for traces; safe to repeat):
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <code className="pre flex-1 overflow-x-auto px-3 py-2 text-xs">{backfill}</code>

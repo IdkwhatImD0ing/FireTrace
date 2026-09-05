@@ -22,12 +22,13 @@ export function TraceTable({
 }) {
   return (
     <div className="card overflow-x-auto">
-      <table className="table-dense w-full min-w-[960px] border-collapse">
+      <table className="table-dense w-full min-w-[1040px] border-collapse">
         <thead>
           <tr>
             <th scope="col">Started (UTC)</th>
             <th scope="col">Trace</th>
             <th scope="col">Status</th>
+            <th scope="col">Env</th>
             <th scope="col" className="text-right">
               Duration
             </th>
@@ -65,6 +66,15 @@ export function TraceTable({
                   {t.errorCount > 0 && (
                     <span className="ml-2 font-mono text-[10px] text-crit-2">
                       {t.errorCount} span err
+                    </span>
+                  )}
+                </td>
+                <td className="font-mono text-[11px]">
+                  {t.environment ? (
+                    <span className="chip">{t.environment}</span>
+                  ) : (
+                    <span className="text-ink-3" title="Recorded by a key without an environment">
+                      —
                     </span>
                   )}
                 </td>

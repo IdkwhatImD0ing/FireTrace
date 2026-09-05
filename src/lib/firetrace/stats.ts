@@ -1,16 +1,21 @@
 import { FieldPath, type Firestore } from "firebase-admin/firestore";
+import { storedEnvironment } from "./environment";
 import {
   bucketMidpointMs,
   decodeKey,
+  envStatsKey,
   HIST_BUCKETS,
   STATS_COLLECTION,
+  STATS_ENV_COLLECTION,
   type StatsDayDoc,
 } from "./stats-rollup";
 
 /**
  * Read side of the per-day rollups: pick a window, fetch its day documents
  * (at most 90) with one document-id range query, and fold them into the view
- * the dashboard renders. Everything below `getProjectStats` is pure.
+ * the dashboard renders. With an environment the same window is read from the
+ * per-environment twin collection instead, so every number follows the
+ * selector. Everything below `getProjectStats` is pure.
  */
 
 export const STATS_RANGES = ["24h", "7d", "14d", "30d", "90d"] as const;
@@ -314,18 +319,20 @@ export async function getProjectStats(
   db: Firestore,
   projectId: string,
   range: StatsRange,
+  /** An environment slug or `unassigned`; omitted = every environment. */
+  environment?: string,
   now = Date.now(),
 ): Promise<ProjectStats> {
   const window = rangeWindow(range, now);
-  const snap = await db
-    .collection("projects")
-    .doc(projectId)
-    .collection(STATS_COLLECTION)
-    .where(FieldPath.documentId(), ">=", window.fromDay)
-    .where(FieldPath.documentId(), "<=", window.toDay)
+  const project = db.collection("projects").doc(projectId);
+  const prefix = environment === undefined ? "" : `${envStatsKey(storedEnvironment(environment))}:`;
+  const snap = await project
+    .collection(environment === undefined ? STATS_COLLECTION : STATS_ENV_COLLECTION)
+    .where(FieldPath.documentId(), ">=", `${prefix}${window.fromDay}`)
+    .where(FieldPath.documentId(), "<=", `${prefix}${window.toDay}`)
     .get();
   return buildStats(
     window,
-    snap.docs.map((d) => ({ id: d.id, data: d.data() as StatsDayDoc })),
+    snap.docs.map((d) => ({ id: d.id.slice(prefix.length), data: d.data() as StatsDayDoc })),
   );
 }

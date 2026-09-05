@@ -36,6 +36,7 @@ function buildPreview(): Preview {
       ingestedAt: trace.endedAt,
       metadataUpdatedAt: null,
       scores: {},
+      environment: null,
     },
     spans: spans.map((s) => ({
       ...s,

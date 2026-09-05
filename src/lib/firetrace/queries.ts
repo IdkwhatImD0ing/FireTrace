@@ -1,6 +1,7 @@
 import { FieldPath, Timestamp, type Firestore, type Query } from "firebase-admin/firestore";
 import { parseUtcDateParam, trimmedParam, withParams } from "@/lib/search-params";
 import { toSpanDetail, toTraceDetail, toTraceSummary } from "./convert";
+import { parseEnvironmentFilter, storedEnvironment } from "./environment";
 import { ApiError } from "./errors";
 import { LIMITS, STATUSES, type TraceStatus } from "./schema";
 import {
@@ -31,6 +32,7 @@ const SORT_FIELD: Record<TraceSort, string> = {
 const TRACE_SUMMARY_FIELDS = [
   "name",
   "status",
+  "environment",
   "startedAt",
   "endedAt",
   "durationMs",
@@ -85,13 +87,56 @@ export function decodeSortCursor(
   }
 }
 
-/** Parse URL search params into validated filters; unknown values are ignored. */
+/** Query parameters `GET /api/v1/traces` understands; anything else is a 400 there. */
+export const TRACE_LIST_PARAMS = [
+  "status",
+  "model",
+  "name",
+  "tag",
+  "environment",
+  "sessionId",
+  "userId",
+  "from",
+  "to",
+  "sort",
+  "limit",
+  "after",
+  "before",
+] as const;
+
+/**
+ * Parse URL search params into validated filters. The dashboard is lenient
+ * (an unknown value is dropped, so a stale bookmark still renders); the API
+ * is strict (an unknown value is a 400 naming it, so a bad filter can never
+ * come back as unfiltered data).
+ */
 export function parseTraceFilters(
   params: Record<string, string | string[] | undefined>,
+  options: { strict?: boolean } = {},
 ): TraceFilters {
+  const strict = options.strict === true;
   const first = (key: string, max: number = LIMITS.maxIdentifierLength) =>
     trimmedParam(params, key, max);
   const status = first("status");
+  if (strict && status && !(STATUSES as readonly string[]).includes(status)) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      `Invalid status "${status}". Use one of: ${STATUSES.join(", ")}.`,
+    );
+  }
+  const time = (key: "from" | "to") => {
+    const raw = first(key);
+    const parsed = parseUtcDateParam(raw);
+    if (strict && raw && !parsed) {
+      throw new ApiError(
+        400,
+        "invalid_request",
+        `Invalid ${key} "${raw}". Use an ISO 8601 timestamp, e.g. 2026-09-02T19:01:02Z.`,
+      );
+    }
+    return parsed;
+  };
   return {
     status:
       status && (STATUSES as readonly string[]).includes(status)
@@ -102,27 +147,48 @@ export function parseTraceFilters(
     userId: first("userId"),
     name: first("name", LIMITS.maxNameLength),
     tag: first("tag", LIMITS.maxTagLength),
-    from: parseUtcDateParam(first("from")),
-    to: parseUtcDateParam(first("to")),
+    environment: parseEnvironmentFilter(first("environment"), { strict }),
+    from: time("from"),
+    to: time("to"),
   };
 }
 
-/** The query string that reproduces a list view: filters plus a non-default sort, without cursors. */
+/**
+ * The query string that reproduces a list view: filters plus a non-default
+ * sort, without cursors. The environment is left out: the dashboard takes it
+ * from the selector, never from the URL.
+ */
 export function traceListQuery(filters: TraceFilters, sort: TraceSort): string {
-  return withParams("", { ...filters, sort: sort === "newest" ? undefined : sort });
+  return withParams("", {
+    ...filters,
+    environment: undefined,
+    sort: sort === "newest" ? undefined : sort,
+  });
 }
 
-/** Unknown or missing values mean newest first. */
-export function parseTraceSort(value: string | string[] | null | undefined): TraceSort {
+/** Missing means newest first; an unknown value does too, unless `strict`, when it is a 400. */
+export function parseTraceSort(
+  value: string | string[] | null | undefined,
+  options: { strict?: boolean } = {},
+): TraceSort {
   const v = Array.isArray(value) ? value[0] : value;
-  return (TRACE_SORTS as readonly string[]).includes(v ?? "") ? (v as TraceSort) : "newest";
+  if ((TRACE_SORTS as readonly string[]).includes(v ?? "")) return v as TraceSort;
+  if (options.strict && v) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      `Invalid sort "${v}". Use one of: ${TRACE_SORTS.join(", ")}.`,
+    );
+  }
+  return "newest";
 }
 
 /**
  * Newest-first, cursor-paginated trace list, or slowest/costliest first with a
  * subset of the filters. Every supported combination has a composite index in
  * firestore.indexes.json; Firestore merges the per-filter indexes when several
- * equality filters are combined.
+ * equality filters are combined. The environment filter is an equality on a
+ * field copied onto the trace at ingest, so it composes with every sort.
  */
 export async function listTraces(
   db: Firestore,
@@ -136,7 +202,7 @@ export async function listTraces(
     throw new ApiError(
       400,
       "invalid_request",
-      `sort=${sort} combines only with status, model, name and tag filters; drop sessionId, userId, from and to or use the default order.`,
+      `sort=${sort} combines only with status, model, name, tag and environment filters; drop sessionId, userId, from and to or use the default order.`,
     );
   }
   let q: Query = db.collection("projects").doc(projectId).collection("traces");
@@ -144,6 +210,9 @@ export async function listTraces(
   if (filters.model) q = q.where("model", "==", filters.model);
   if (filters.name) q = q.where("name", "==", filters.name);
   if (filters.tag) q = q.where("tags", "array-contains", filters.tag);
+  if (filters.environment !== undefined) {
+    q = q.where("environment", "==", storedEnvironment(filters.environment));
+  }
   if (filters.sessionId) q = q.where("sessionId", "==", filters.sessionId);
   if (filters.userId) q = q.where("userId", "==", filters.userId);
   if (filters.from) q = q.where("startedAt", ">=", Timestamp.fromDate(new Date(filters.from)));

@@ -21,13 +21,50 @@ Keys are created per project under **Project → Settings → API keys**. Only a
 
 Keys can also carry an expiry (30 days, 90 days, 1 year, or never). Expired, revoked, unknown, and malformed keys all produce the same `401 invalid_api_key` with a `WWW-Authenticate: Bearer` challenge, so a response never reveals whether a key id exists. Calling a route without the required scope yields `403 insufficient_scope`.
 
-Rotating a key issues a new secret with the same label, scopes, and expiry and revokes the old one in the same transaction. `lastUsedAt` is updated at most every five minutes per key so busy keys do not cost a write per request.
+Rotating a key issues a new secret with the same label, scopes, environment, and expiry and revokes the old one in the same transaction. `lastUsedAt` is updated at most every five minutes per key so busy keys do not cost a write per request.
+
+## Environments
+
+Every key carries an optional **environment**: a slug matching `[a-z0-9][a-z0-9_-]{0,31}` (input is folded to lowercase, so `Production` becomes `production`). The key dialog offers `production`, `preview` and `development` as one-click presets; `staging`, `qa`, `local` or anything else that fits the pattern works the same way. `unassigned` and `all` are reserved and cannot be key environments.
+
+When a key records a trace, the server copies the key's environment onto the trace as `environment`. Nothing in the request body can set or override it: the ingest schema rejects an `environment` field with `400 invalid_trace`, exactly like any other unknown field. That is what makes the separation trustworthy. A preview deployment physically cannot write into production's numbers, because it does not hold production's key.
+
+It also means no application code changes. Mint one key per environment and set a different `FIRETRACE_API_KEY` in each of your host's environment scopes (Vercel, Netlify, Fly and Docker all scope secrets that way). If you currently share one key across environments, that is the one step to take; the key screen shows a "one key per environment" prompt until a key has an environment. Verify the wiring at startup with `GET /api/v1/key`, which reports the environment.
+
+Rules worth knowing:
+
+- A key without an environment stamps `null`; such traces are **unassigned**. Every key and every trace that predates environments is unassigned. Nothing is ever silently relabelled `production`.
+- Changing a key's environment (the "change" control on the key screen) affects traces it records from then on. FireTrace never rewrites stored traces; `scripts/backfill-environment.ts` (below) is the explicit way to classify history.
+- Revoking or deleting a key leaves its traces and their environment intact: the value is copied at ingest, never looked up through the key when reading.
+- Two keys may share one environment. A rotation in progress is the normal case.
+- Scores never store an environment; they inherit their trace's, so the two cannot disagree.
+- A resend of a trace through a key with another environment is still the same trace: `200` duplicate, environment unchanged.
+- The dashboard has a project-wide environment selector (a cookie, not a URL parameter). It defaults to `production` once a key is assigned there, otherwise to every environment, and every list, chart and summary number follows it. The project's trace, span and storage counts stay project-wide, because storage is one quota.
+
+### Assigning environments to history
+
+Traces recorded before environments existed carry no `environment` field at all, and Firestore cannot query for a missing field, so they are invisible to `?environment=unassigned` (and to the dashboard's "unassigned" selection) until they are marked. `scripts/backfill-environment.ts` does that, and can also classify history by the key that recorded it, by a tag (the `env:production` convention older integrations used), or by time. It is a dry run unless `--apply` is given, never deletes anything, reads every trace in the project once, and ends by rebuilding the dashboard rollups so the numbers move with the traces:
+
+```bash
+# Mark every trace without an environment field as unassigned (do this once after upgrading).
+pnpm exec tsx scripts/backfill-environment.ts --project <projectId> --apply
+
+# Classify history: every selector given must match (AND); only unassigned traces change.
+pnpm exec tsx scripts/backfill-environment.ts --project <projectId> --environment production --tag env:production --apply
+pnpm exec tsx scripts/backfill-environment.ts --project <projectId> --environment development --key <keyId> --apply
+pnpm exec tsx scripts/backfill-environment.ts --project <projectId> --environment preview --from 2026-08-01T00:00:00Z --to 2026-08-15T00:00:00Z --apply
+
+# Relabel traces that already have an environment.
+pnpm exec tsx scripts/backfill-environment.ts --project <projectId> --environment production --tag env:prod --overwrite --apply
+```
+
+`--key` matches the key id recorded on each trace, which exists only for traces ingested since environments were introduced; for older traces use `--tag` or a time window.
 
 ## Endpoints
 
 ### `GET /api/v1/key`
 
-Describe the calling key. Use it to verify configuration at startup.
+Describe the calling key. Use it to verify configuration at startup, including which environment the key's traces will land in.
 
 ```json
 {
@@ -35,9 +72,12 @@ Describe the calling key. Use it to verify configuration at startup.
   "projectId": "proj_8f2c1d",
   "scopes": ["traces:write", "traces:read"],
   "expiresAt": null,
-  "lastUsedAt": "2026-09-03T10:12:00.000Z"
+  "lastUsedAt": "2026-09-03T10:12:00.000Z",
+  "environment": "production"
 }
 ```
+
+`environment` is `null` for a key that has none.
 
 ### `GET /api/v1/project` — scope `traces:read`
 
@@ -80,22 +120,25 @@ On instances that enable trial mode (`FIRETRACE_TRIAL_TRACE_LIMIT`), a trial acc
 
 Newest-first list with cursor pagination. Filters combine with AND.
 
-| Query       | Notes                                                                         |
-| ----------- | ----------------------------------------------------------------------------- |
-| `status`    | `ok`, `error`, or `unset`                                                     |
-| `model`     | exact model string                                                            |
-| `name`      | exact trace name                                                              |
-| `tag`       | one tag the trace must carry                                                  |
-| `sessionId` | exact                                                                         |
-| `userId`    | exact                                                                         |
-| `from`      | inclusive ISO-8601 lower bound on `startedAt`                                 |
-| `to`        | inclusive ISO-8601 upper bound on `startedAt`                                 |
-| `sort`      | `newest` (default), `slowest` (by `durationMs`) or `costliest` (by `costUsd`) |
-| `limit`     | 1–200, default 50                                                             |
-| `after`     | `nextCursor` of a previous page (older traces)                                |
-| `before`    | `prevCursor` of a previous page (newer traces)                                |
+| Query         | Notes                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `status`      | `ok`, `error`, or `unset`                                                                  |
+| `model`       | exact model string                                                                         |
+| `name`        | exact trace name                                                                           |
+| `tag`         | one tag the trace must carry                                                               |
+| `environment` | an environment slug (case-folded), or `unassigned` for traces recorded by keys without one |
+| `sessionId`   | exact                                                                                      |
+| `userId`      | exact                                                                                      |
+| `from`        | inclusive ISO-8601 lower bound on `startedAt`                                              |
+| `to`          | inclusive ISO-8601 upper bound on `startedAt`                                              |
+| `sort`        | `newest` (default), `slowest` (by `durationMs`) or `costliest` (by `costUsd`)              |
+| `limit`       | 1–200, default 50                                                                          |
+| `after`       | `nextCursor` of a previous page (older traces)                                             |
+| `before`      | `prevCursor` of a previous page (newer traces)                                             |
 
-`slowest` and `costliest` combine only with `status`, `model`, `name` and `tag`; adding `sessionId`, `userId`, `from` or `to` to them is a `400 invalid_request`, because Firestore has no index for that combination. `costliest` omits traces that were recorded without `costUsd`. A cursor is only valid under the sort that produced it.
+`slowest` and `costliest` combine only with `status`, `model`, `name`, `tag` and `environment`; adding `sessionId`, `userId`, `from` or `to` to them is a `400 invalid_request`, because Firestore has no index for that combination. `environment` composes with every sort and filter, so "costliest production traces" is `?environment=production&sort=costliest`. `costliest` omits traces that were recorded without `costUsd`. A cursor is only valid under the sort that produced it. Omitting `environment` returns every environment, as before; filtering by an environment no key has ever used is a `200` with an empty list.
+
+The query string is **strict**, like the ingest body: an unknown parameter (`?env=production`, `?Status=error`) or an unknown value for `status`, `sort`, `environment`, `from` or `to` is a `400 invalid_request` whose message names the offender. A misspelled filter can therefore never come back as a complete, unfiltered list.
 
 ```json
 {
@@ -104,6 +147,7 @@ Newest-first list with cursor pagination. Filters combine with AND.
       "id": "42f38ac8295345a7a12c4e3f60d6da23",
       "name": "answer-question",
       "status": "ok",
+      "environment": "production",
       "startedAt": "2026-09-02T19:01:02.120Z",
       "endedAt": "2026-09-02T19:01:04.812Z",
       "durationMs": 2692,
@@ -264,15 +308,16 @@ Every score of one trace, newest first: `{ "traceId", "scores": [ ... ] }`. A tr
 
 Newest-first list across the project with cursor pagination. Filters combine with AND.
 
-| Query   | Notes                                          |
-| ------- | ---------------------------------------------- |
-| `name`  | exact score name                               |
-| `from`  | inclusive ISO-8601 lower bound on `createdAt`  |
-| `to`    | inclusive ISO-8601 upper bound on `createdAt`  |
-| `limit` | 1–500, default 50                              |
-| `after` | `nextCursor` of a previous page (older scores) |
+| Query         | Notes                                                                   |
+| ------------- | ----------------------------------------------------------------------- |
+| `name`        | exact score name                                                        |
+| `environment` | only scores whose trace is in this environment (a slug or `unassigned`) |
+| `from`        | inclusive ISO-8601 lower bound on `createdAt`                           |
+| `to`          | inclusive ISO-8601 upper bound on `createdAt`                           |
+| `limit`       | 1–500, default 50                                                       |
+| `after`       | `nextCursor` of a previous page (older scores)                          |
 
-Responds with `{ "scores": [ ... ], "nextCursor": "…" | null, "pageSize": 50 }`. An unparseable cursor is `400 invalid_request`.
+Responds with `{ "scores": [ ... ], "nextCursor": "…" | null, "pageSize": 50 }`. An unparseable cursor is `400 invalid_request`, and so is an unknown parameter or value, which the message names. `environment` is resolved through each score's trace (scores never store one): the server scans scores in order, keeps those whose trace matches, and examines at most 1000 per call, after which `nextCursor` points at the last score examined rather than the last one returned, so keep paging until it is `null`. A page filtered by environment therefore costs one trace read per distinct trace on top of the score reads.
 
 #### `DELETE /api/v1/traces/{traceId}/scores/{scoreId}` — scope `traces:delete`
 

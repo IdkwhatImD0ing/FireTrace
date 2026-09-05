@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { requireAccessibleProject } from "@/lib/auth/access";
 import { requireOwner } from "@/lib/auth/session";
+import { getEnvironmentView } from "@/lib/environment-selection";
 import { adminDb } from "@/lib/firebase/admin";
 import { toCsv, type CsvValue } from "@/lib/firetrace/csv";
 import { ApiError, errorToResponse, NO_STORE_HEADERS } from "@/lib/firetrace/errors";
@@ -14,6 +15,7 @@ const COLUMNS = [
   "id",
   "name",
   "status",
+  "environment",
   "startedAt",
   "endedAt",
   "durationMs",
@@ -35,7 +37,8 @@ const COLUMNS = [
 
 /**
  * GET -> the page of traces the dashboard is showing, as CSV. Owner only.
- * Takes the same query string as the trace list (filters, sort, after/before).
+ * Takes the same query string as the trace list (filters, sort, after/before)
+ * and the environment from the selector's cookie, so it matches the screen.
  */
 export async function GET(
   request: NextRequest,
@@ -49,15 +52,22 @@ export async function GET(
     const db = adminDb();
     await requireAccessibleProject(db, owner, projectId);
     const sp = request.nextUrl.searchParams;
-    const page = await listTraces(db, projectId, parseTraceFilters(Object.fromEntries(sp)), {
-      after: sp.get("after") ?? undefined,
-      before: sp.get("before") ?? undefined,
-      sort: parseTraceSort(sp.get("sort")),
-    });
+    const view = await getEnvironmentView(db, projectId);
+    const page = await listTraces(
+      db,
+      projectId,
+      { ...parseTraceFilters(Object.fromEntries(sp)), environment: view.filter },
+      {
+        after: sp.get("after") ?? undefined,
+        before: sp.get("before") ?? undefined,
+        sort: parseTraceSort(sp.get("sort")),
+      },
+    );
     const rows: CsvValue[][] = page.traces.map((t) => [
       t.id,
       t.name,
       t.status,
+      t.environment,
       t.startedAt,
       t.endedAt,
       t.durationMs,

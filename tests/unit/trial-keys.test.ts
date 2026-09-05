@@ -9,6 +9,7 @@ const base: AuthenticatedKey = {
   expiresAt: null,
   lastUsedAt: null,
   plan: "owner",
+  environment: null,
 };
 
 describe("requireTrialModeForKey", () => {

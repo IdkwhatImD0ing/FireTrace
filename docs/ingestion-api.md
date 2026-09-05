@@ -33,6 +33,8 @@ The `Authorization` header is `Bearer <key>` (scheme matched case-insensitively)
 
 Every object in the body is **strict**: unknown keys at any level (request, trace, span, event, usage) are rejected with `400 invalid_trace`. `schemaVersion` must be the number `1`.
 
+The trace's **environment** is deliberately not a body field. It comes from the API key ([api.md](./api.md#environments)): the server copies the key's environment onto the stored trace, and a body that includes `environment` is rejected like any other unknown key. Use one key per environment and a different `FIRETRACE_API_KEY` per deployment scope; the application never needs to know which environment it runs in.
+
 ### Trace object
 
 | Field       | Type                                            | Required | Rules                                                                         |
@@ -124,7 +126,7 @@ The route performs these steps in order; the first failure determines the respon
 5. Normalize: lowercase ids, re-serialize timestamps as UTC ISO strings, compute `durationMs` for the trace and each span, compute `spanCount` and `errorCount` (spans with `status: "error"`), drop `undefined` fields, and apply defaults.
 6. Check the 750 KiB per-document limits and sum the serialized sizes into `estimatedBytes` (`413`).
 7. Compute `bodyHash = SHA-256(canonical JSON of { trace, spans })`, where canonical JSON sorts object keys recursively and has no whitespace (`src/lib/firetrace/hash.ts`).
-8. Run one Firestore transaction (`ingestTrace`): read the project and the trace document, then either write the trace, all span documents, and the project counter deltas (`traceCount`, `spanCount`, `estimatedBytes`, `lastTraceAt`, `updatedAt`), or return a duplicate, or raise a conflict. The transaction is awaited before the response is sent.
+8. Run one Firestore transaction (`ingestTrace`): read the project and the trace document, then either write the trace (stamped with the key's `environment` and `keyId`, neither of which is part of the hash), all span documents, the dashboard rollups (one for every environment together, one for the trace's environment), and the project counter deltas (`traceCount`, `spanCount`, `estimatedBytes`, `lastTraceAt`, `updatedAt`), or return a duplicate, or raise a conflict. The transaction is awaited before the response is sent.
 
 ### Idempotency
 
@@ -380,6 +382,7 @@ One trace with every span:
     "id": "42f38ac8295345a7a12c4e3f60d6da23",
     "name": "answer-question",
     "status": "ok",
+    "environment": "production",
     "startedAt": "2026-09-02T19:01:02.120Z",
     "endedAt": "2026-09-02T19:01:04.812Z",
     "durationMs": 2692,
@@ -405,9 +408,9 @@ One trace with every span:
 }
 ```
 
-`durationMs`, `spanCount`, and `errorCount` are computed at ingestion, not sent by the caller. Spans come back ordered by `startedAt`, then id. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace belonging to another project. `metadataUpdatedAt` was added with the metadata patch and is `null` on every trace recorded before it; a client validating this response strictly must allow the extra key.
+`durationMs`, `spanCount`, `errorCount`, and `environment` are computed at ingestion, not sent by the caller: the first three from the body, the last from the recording key (`null` when the key has none and on every trace recorded before environments existed). Spans come back ordered by `startedAt`, then id. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace belonging to another project. `metadataUpdatedAt` and `environment` were added after the first release and are `null` on older traces; a client validating this response strictly must allow the extra keys.
 
-`GET /api/v1/traces` lists traces newest first with cursor pagination and filters on status, model, session id, user id, and a time range; AI agents can read the same data over MCP ([mcp.md](./mcp.md)). Both are documented in [api.md](./api.md). Recording requires the `traces:write` scope. Owners also read traces in the dashboard and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
+`GET /api/v1/traces` lists traces newest first with cursor pagination and filters on status, model, name, tag, environment, session id, user id, and a time range; its query string is as strict as this endpoint's body (an unknown parameter or value is a `400`). AI agents can read the same data over MCP ([mcp.md](./mcp.md)). Both are documented in [api.md](./api.md). Recording requires the `traces:write` scope. Owners also read traces in the dashboard and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
 
 ## Versioning
 

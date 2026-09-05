@@ -66,6 +66,10 @@ describe("backfill-stats against the emulator", () => {
       days: Object.keys(live).length,
       written: 0,
       deleted: 0,
+      // Every trace here is unassigned, so the per-environment twins are one per day too.
+      environmentDays: Object.keys(live).length,
+      environmentWritten: 0,
+      environmentDeleted: 0,
     });
     expect(Object.keys(await statsDocs(project.id))).toEqual(["2020-01-01"]);
 
@@ -75,7 +79,19 @@ describe("backfill-stats against the emulator", () => {
       scores: 2,
       written: Object.keys(live).length,
       deleted: 1,
+      environmentWritten: Object.keys(live).length,
+      environmentDeleted: 0,
     });
+    const envDocs = await db()
+      .collection("projects")
+      .doc(project.id)
+      .collection("statsByEnv")
+      .get();
+    expect(envDocs.docs.map((d) => d.id).sort()).toEqual(
+      Object.keys(live)
+        .map((id) => `_unassigned:${id}`)
+        .sort(),
+    );
     const rebuilt = await statsDocs(project.id);
     expect(Object.keys(rebuilt).sort()).toEqual(Object.keys(live).sort());
     for (const id of Object.keys(live)) {

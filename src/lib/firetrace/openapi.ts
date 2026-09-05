@@ -72,6 +72,11 @@ const traceSummarySchema = {
     id: { type: "string", pattern: "^[0-9a-f]{32}$" },
     name: { type: "string" },
     status: { type: "string", enum: [...STATUSES] },
+    environment: {
+      type: ["string", "null"],
+      description:
+        "Environment of the API key that recorded the trace, stamped by the server at ingest; null = unassigned (keys without one, and every trace recorded before environments existed)",
+    },
     startedAt: { type: "string", format: "date-time" },
     endedAt: { type: "string", format: "date-time" },
     durationMs: { type: "integer" },
@@ -182,6 +187,13 @@ export function ingestRequestJsonSchema(): Record<string, unknown> {
 }
 
 const bearer = [{ apiKey: [] }];
+const environmentParam = {
+  name: "environment",
+  in: "query",
+  schema: { type: "string", pattern: "^([a-z0-9][a-z0-9_-]{0,31}|unassigned)$" },
+  description:
+    "Environment stamped from the recording key (case-folded), or `unassigned` for traces recorded by keys without one",
+} as const;
 const traceIdParam = {
   name: "traceId",
   in: "path",
@@ -403,7 +415,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
           operationId: "listTraces",
           summary: "List traces newest first with cursor pagination",
           description:
-            "Requires `traces:read`. Filters combine with AND. Use `after`/`before` cursors from a previous page; never offsets. `sort=slowest` (by durationMs) and `sort=costliest` (by costUsd; traces without a cost are omitted) combine only with `status`, `model`, `name` and `tag`; adding `sessionId`, `userId`, `from` or `to` is a 400. A cursor is only valid under the sort that produced it.",
+            "Requires `traces:read`. Filters combine with AND. Use `after`/`before` cursors from a previous page; never offsets. `sort=slowest` (by durationMs) and `sort=costliest` (by costUsd; traces without a cost are omitted) combine only with `status`, `model`, `name`, `tag` and `environment`; adding `sessionId`, `userId`, `from` or `to` is a 400. A cursor is only valid under the sort that produced it. The query string is strict: an unknown parameter, or an unknown value for `status`, `sort`, `environment`, `from` or `to`, is a `400 invalid_request` naming it, so a misspelled filter can never come back as unfiltered data.",
           parameters: [
             { name: "status", in: "query", schema: { type: "string", enum: [...STATUSES] } },
             { name: "model", in: "query", schema: { type: "string" } },
@@ -419,6 +431,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
               schema: { type: "string" },
               description: "One tag the trace must carry",
             },
+            environmentParam,
             { name: "sessionId", in: "query", schema: { type: "string" } },
             { name: "userId", in: "query", schema: { type: "string" } },
             {
@@ -468,7 +481,7 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
               },
             },
             "400": {
-              description: "Invalid cursor or parameter",
+              description: "Unknown parameter or value, or an invalid cursor; the message names it",
               ...errorRef,
             },
             ...errorResponses,
@@ -696,13 +709,19 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
         get: {
           operationId: "listScores",
           summary: "List scores across the project newest first with cursor pagination",
-          description: "Requires `traces:read`. Filters combine with AND.",
+          description:
+            "Requires `traces:read`. Filters combine with AND. `environment` is resolved through each score's trace (scores never store one). The query string is strict: an unknown parameter or value is a `400 invalid_request` naming it.",
           parameters: [
             {
               name: "name",
               in: "query",
               schema: { type: "string" },
               description: "Exact score name",
+            },
+            {
+              ...environmentParam,
+              description:
+                "Only scores whose trace is in this environment, or `unassigned` for traces without one",
             },
             {
               name: "from",
@@ -735,7 +754,10 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
                 "application/json": { schema: { $ref: "#/components/schemas/ScorePage" } },
               },
             },
-            "400": { description: "Invalid cursor or parameter", ...errorRef },
+            "400": {
+              description: "Unknown parameter or value, or an invalid cursor; the message names it",
+              ...errorRef,
+            },
             ...errorResponses,
           },
         },

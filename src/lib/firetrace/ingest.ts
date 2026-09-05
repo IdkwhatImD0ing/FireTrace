@@ -3,11 +3,14 @@ import { ApiError, rethrowQuotaExhausted } from "./errors";
 import type { NormalizedIngest, NormalizedSpan, NormalizedTrace } from "./normalize";
 import {
   chooseKey,
+  envStatsDocId,
   STATS_CAPS,
   STATS_COLLECTION,
+  STATS_ENV_COLLECTION,
   statsDayId,
   statsIncrements,
   traceStatsDeltas,
+  type StatsDayDoc,
 } from "./stats-rollup";
 import { effectivePlan, TRIAL_USAGE_COLLECTION, trialLimitMessage, trialSubject } from "./trial";
 
@@ -17,13 +20,34 @@ function toTimestamp(iso: string): Timestamp {
   return Timestamp.fromDate(new Date(iso));
 }
 
-export function traceDocument(trace: NormalizedTrace, bodyHash: string, estimatedBytes: number) {
+/**
+ * What the server stamps on a trace from the authenticating key. Neither
+ * value is part of the body or its hash: the client cannot choose them, and a
+ * resend with another key is still the same trace.
+ */
+export interface IngestStamp {
+  /** The key's environment at ingest time; null = unassigned. Never rewritten. */
+  environment: string | null;
+  /** Which key sent the trace, so history can be assigned an environment per key later. */
+  keyId: string | null;
+}
+
+const NO_STAMP: IngestStamp = { environment: null, keyId: null };
+
+export function traceDocument(
+  trace: NormalizedTrace,
+  bodyHash: string,
+  estimatedBytes: number,
+  stamp: IngestStamp = NO_STAMP,
+) {
   return {
     ...trace,
     startedAt: toTimestamp(trace.startedAt),
     endedAt: toTimestamp(trace.endedAt),
     bodyHash,
     estimatedBytes,
+    environment: stamp.environment,
+    keyId: stamp.keyId,
     ingestedAt: FieldValue.serverTimestamp(),
   };
 }
@@ -47,6 +71,8 @@ export interface IngestOptions {
   repositoryUrl: string;
   /** DASHBOARD_ALLOWED_EMAILS: a trial project whose creator is now allowlisted is uncapped. */
   allowedEmails: readonly string[];
+  /** Environment and key id copied onto the trace; omitted = unassigned (seed and test data). */
+  stamp?: IngestStamp;
 }
 
 const DEFAULT_INGEST_OPTIONS: IngestOptions = {
@@ -69,17 +95,22 @@ export async function ingestTrace(
 ): Promise<IngestOutcome> {
   const projectRef = db.collection("projects").doc(projectId);
   const traceRef = projectRef.collection("traces").doc(normalized.trace.id);
-  // Dashboard rollup for the trace's UTC day; read so the per-day key caps hold.
-  const dayRef = projectRef
-    .collection(STATS_COLLECTION)
-    .doc(statsDayId(normalized.trace.startedAt));
+  const stamp = options.stamp ?? NO_STAMP;
+  // Dashboard rollups for the trace's UTC day (all environments, and the
+  // trace's own); read so the per-day key caps hold.
+  const day = statsDayId(normalized.trace.startedAt);
+  const dayRef = projectRef.collection(STATS_COLLECTION).doc(day);
+  const envDayRef = projectRef
+    .collection(STATS_ENV_COLLECTION)
+    .doc(envStatsDocId(stamp.environment, day));
 
   try {
     return await db.runTransaction(async (tx) => {
-      const [projectSnap, traceSnap, daySnap] = await Promise.all([
+      const [projectSnap, traceSnap, daySnap, envDaySnap] = await Promise.all([
         tx.get(projectRef),
         tx.get(traceRef),
         tx.get(dayRef),
+        tx.get(envDayRef),
       ]);
       if (!projectSnap.exists) {
         throw new ApiError(
@@ -139,15 +170,13 @@ export async function ingestTrace(
 
       tx.set(
         traceRef,
-        traceDocument(normalized.trace, normalized.bodyHash, normalized.estimatedBytes),
+        traceDocument(normalized.trace, normalized.bodyHash, normalized.estimatedBytes, stamp),
       );
       for (const span of normalized.spans) {
         tx.set(traceRef.collection("spans").doc(span.id), spanDocument(span));
       }
       const t = normalized.trace;
-      const day = daySnap.data() ?? {};
-      tx.set(
-        dayRef,
+      const increments = (existing: StatsDayDoc) =>
         statsIncrements(
           traceStatsDeltas(
             {
@@ -161,14 +190,14 @@ export async function ingestTrace(
               spanCount: t.spanCount,
             },
             {
-              model: chooseKey(day.byModel, t.model ?? null, STATS_CAPS.models),
-              name: chooseKey(day.byName, t.name, STATS_CAPS.names),
+              model: chooseKey(existing.byModel, t.model ?? null, STATS_CAPS.models),
+              name: chooseKey(existing.byName, t.name, STATS_CAPS.names),
             },
           ),
           1,
-        ),
-        { merge: true },
-      );
+        );
+      tx.set(dayRef, increments(daySnap.data() ?? {}), { merge: true });
+      tx.set(envDayRef, increments(envDaySnap.data() ?? {}), { merge: true });
       const incomingStart = toTimestamp(normalized.trace.startedAt);
       const previousLast = projectSnap.get("lastTraceAt");
       const lastTraceAt =

@@ -30,6 +30,8 @@ export interface KeyInfo {
   scopes: string[];
   expiresAt: string | null;
   lastUsedAt: string | null;
+  /** Stamped onto every trace this key records; null = unassigned. */
+  environment: string | null;
 }
 
 export interface ProjectInfo {
@@ -50,6 +52,8 @@ export interface TraceSummary {
   id: string;
   name: string;
   status: TraceStatus;
+  /** Copied from the recording key at ingest; null = unassigned. */
+  environment: string | null;
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -98,6 +102,8 @@ export interface ScorePage {
 export interface ListScoresQuery {
   /** Exact score name. */
   name?: string;
+  /** Environment of the score's trace (a slug or "unassigned"), resolved through the trace. */
+  environment?: string;
   /** Inclusive ISO-8601 lower bound on createdAt. */
   from?: string;
   /** Inclusive ISO-8601 upper bound on createdAt. */
@@ -160,9 +166,11 @@ export interface ListTracesQuery {
   name?: string;
   /** One tag the trace must carry. */
   tag?: string;
+  /** An environment slug, or "unassigned" for traces recorded by keys without one. */
+  environment?: string;
   sessionId?: string;
   userId?: string;
-  /** newest (default), slowest or costliest; the latter two only with status/model/name/tag. */
+  /** newest (default), slowest or costliest; the latter two only with status/model/name/tag/environment. */
   sort?: "newest" | "slowest" | "costliest";
   /** Inclusive ISO-8601 lower bound on startedAt. */
   from?: string;

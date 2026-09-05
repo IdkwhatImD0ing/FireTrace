@@ -28,6 +28,8 @@ interface KeyInfo {
   projectId: string;
   scopes: string[];
   expiresAt: string | null;
+  /** Absent on deployments that predate environments. */
+  environment?: string | null;
 }
 
 /**
@@ -127,6 +129,7 @@ export class HttpBackend implements TraceBackend {
     }
     const sp = new URLSearchParams();
     if (query.name) sp.set("name", query.name);
+    if (query.environment) sp.set("environment", query.environment);
     if (query.limit) sp.set("limit", String(query.limit));
     if (query.cursor) sp.set("after", query.cursor);
     const qs = sp.toString();

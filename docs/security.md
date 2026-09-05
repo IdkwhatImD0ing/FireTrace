@@ -66,6 +66,7 @@ A FireTrace deployment is a Next.js application (typically on Vercel) plus one F
 - All authentication failures (missing, malformed, unknown, revoked, expired) return an identical `401 invalid_api_key` with a `WWW-Authenticate: Bearer` challenge, so responses do not reveal whether a key id exists.
 - **Scopes** (`src/lib/firetrace/scopes.ts`): each key stores `scopes` chosen at creation from `traces:write`, `traces:read`, `traces:delete`. `withApiKey(scope, …)` (`api-handler.ts`) calls `requireScope` before the handler runs and answers `403 insufficient_scope`. Keys created before scopes existed are treated as `traces:write` only. Rotation copies scopes and expiry.
 - **Expiry**: optional `expiresAt` (30 d / 90 d / 1 y presets); `keyIsUsable` rejects a key at or past the instant. `lastUsedAt` is refreshed at most every five minutes and never carries request content.
+- **Environment** (`src/lib/firetrace/environment.ts`): an optional slug on the key that the server copies onto every trace it records. It is never read from the request (the ingest schema rejects an `environment` field), so a key can only ever write into its own environment and a leaked preview key cannot pollute production. Changing or revoking a key never touches stored traces.
 - **MCP** (`src/app/api/mcp/route.ts`): the same bearer authentication runs before any JSON-RPC message is parsed; the server is built per request (stateless, no session ids, `GET`/`DELETE` are 405) and only registers tools the key's scopes allow. Deletion additionally requires `confirm: true`.
 
 ### Logging

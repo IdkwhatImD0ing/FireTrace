@@ -78,21 +78,25 @@ export class FirestoreBackend implements TraceBackend {
   }
 
   async listTraces(query: ListTracesQuery): Promise<TracePageLike> {
-    const filters = parseTraceFilters({
-      status: query.status,
-      model: query.model,
-      name: query.name,
-      tag: query.tag,
-      sessionId: query.sessionId,
-      userId: query.userId,
-      from: query.from,
-      to: query.to,
-    });
+    const filters = parseTraceFilters(
+      {
+        status: query.status,
+        model: query.model,
+        name: query.name,
+        tag: query.tag,
+        environment: query.environment,
+        sessionId: query.sessionId,
+        userId: query.userId,
+        from: query.from,
+        to: query.to,
+      },
+      { strict: true },
+    );
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     return listTraces(this.db, this.projectId, filters, {
       after: query.cursor,
       limit,
-      sort: parseTraceSort(query.sort),
+      sort: parseTraceSort(query.sort, { strict: true }),
     });
   }
 
@@ -129,7 +133,7 @@ export class FirestoreBackend implements TraceBackend {
     const page = await listScores(
       this.db,
       this.projectId,
-      parseScoreFilters({ name: query.name }),
+      parseScoreFilters({ name: query.name, environment: query.environment }, { strict: true }),
       {
         after: query.cursor,
         limit,
@@ -148,6 +152,7 @@ export class FirestoreBackend implements TraceBackend {
       trialTraceLimit: this.env.trialTraceLimit,
       repositoryUrl: this.env.repositoryUrl,
       allowedEmails: this.env.allowedEmails,
+      stamp: { environment: this.auth.environment, keyId: this.auth.keyId },
     });
     return {
       ok: true,
