@@ -26,18 +26,16 @@ import {
   recentFacets,
   traceListQuery,
 } from "@/lib/firetrace/queries";
+import { getProjectStats } from "@/lib/firetrace/stats";
 import { formatBytes } from "@/lib/firetrace/storage";
 import type { TracePage, TraceSort } from "@/lib/firetrace/types";
 import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
+import { firstParam, withParams } from "@/lib/search-params";
 
 export const metadata: Metadata = { title: "Traces" };
 /** Bulk evaluator runs are server actions on this route; up to 50 judge calls. */
 export const maxDuration = 300;
-
-function first(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v;
-}
 
 const SORT_LABEL: Record<TraceSort, string> = {
   newest: "newest first",
@@ -45,12 +43,12 @@ const SORT_LABEL: Record<TraceSort, string> = {
   costliest: "costliest first",
 };
 
-function withParams(base: string, params: Record<string, string | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
-  const qs = search.toString();
-  return qs ? `${base}?${qs}` : base;
-}
+const EMPTY_PAGE: TracePage = {
+  traces: [],
+  nextCursor: null,
+  prevCursor: null,
+  pageSize: DEFAULT_PAGE_SIZE,
+};
 
 export default async function ProjectTracesPage({
   params,
@@ -64,36 +62,12 @@ export default async function ProjectTracesPage({
   const db = adminDb();
   const project = await getAccessibleProject(db, owner, projectId);
   if (!project) notFound();
-  const trial =
-    effectivePlan(project, env.allowedEmails) === "trial"
-      ? await getTrialUsage(db, trialSubject(project.ownerEmail ?? project.ownerUid))
-      : null;
 
   const filters = parseTraceFilters(sp);
   const sort = parseTraceSort(sp.sort);
-  const after = first(sp.after);
-  const before = first(sp.before);
+  const after = firstParam(sp.after);
+  const before = firstParam(sp.before);
   const isOwner = owner.role === "owner";
-  const [keys, facets, evaluators] = await Promise.all([
-    listApiKeys(db, projectId),
-    recentFacets(db, projectId),
-    isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
-  ]);
-  let page: TracePage = {
-    traces: [],
-    nextCursor: null,
-    prevCursor: null,
-    pageSize: DEFAULT_PAGE_SIZE,
-  };
-  let listError: string | null = null;
-  try {
-    page = await listTraces(db, projectId, filters, { after, before, sort });
-  } catch (err) {
-    // A sort that does not combine with the chosen filters: say so instead of a 500.
-    if (!(err instanceof ApiError) || err.status !== 400) throw err;
-    listError = err.message;
-  }
-
   const filterParams = {
     status: filters.status,
     model: filters.model,
@@ -108,6 +82,29 @@ export default async function ProjectTracesPage({
   const base = `/projects/${projectId}`;
   const filtering = Object.values(filterParams).some(Boolean);
   const listQuery = traceListQuery(filters, sort);
+  const showList = project.traceCount > 0 || filtering;
+
+  const loadList = async (): Promise<{ page: TracePage; listError: string | null }> => {
+    try {
+      const page = await listTraces(db, projectId, filters, { after, before, sort });
+      return { page, listError: null };
+    } catch (err) {
+      // A sort that does not combine with the chosen filters: say so instead of a 500.
+      if (!(err instanceof ApiError) || err.status !== 400) throw err;
+      return { page: EMPTY_PAGE, listError: err.message };
+    }
+  };
+  // Everything below needs only the authorized project, so it is one round trip.
+  const [trial, keys, facets, evaluators, { page, listError }, stats] = await Promise.all([
+    effectivePlan(project, env.allowedEmails) === "trial"
+      ? getTrialUsage(db, trialSubject(project.ownerEmail ?? project.ownerUid))
+      : null,
+    listApiKeys(db, projectId),
+    recentFacets(db, projectId),
+    isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
+    loadList(),
+    showList ? getProjectStats(db, projectId, "14d") : null,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -153,7 +150,7 @@ export default async function ProjectTracesPage({
       ) : (
         <>
           <TraceFilters projectId={projectId} filters={filters} facets={facets} sort={sort} />
-          <TraceHistogram projectId={projectId} />
+          {stats && <TraceHistogram projectId={projectId} stats={stats} />}
           {(filters.sessionId || filters.userId) && page.traces.length > 0 && (
             <SessionSummary filters={filters} traces={page.traces} />
           )}

@@ -186,7 +186,8 @@ async function deleteQueryInBatches(
 ): Promise<number> {
   let deleted = 0;
   for (;;) {
-    const snap = await query.limit(DELETE_BATCH).get();
+    // Only the references are needed; select() keeps the payloads in Firestore.
+    const snap = await query.select().limit(DELETE_BATCH).get();
     if (snap.empty) return deleted;
     const batch = db.batch();
     for (const doc of snap.docs) batch.delete(doc.ref);
@@ -294,7 +295,7 @@ export async function deleteProject(
   let traces = 0;
   let spans = 0;
   for (;;) {
-    const page = await projectRef.collection("traces").limit(50).get();
+    const page = await projectRef.collection("traces").select().limit(50).get();
     if (page.empty) break;
     for (const trace of page.docs) {
       spans += await deleteQueryInBatches(db, trace.ref.collection("spans"));

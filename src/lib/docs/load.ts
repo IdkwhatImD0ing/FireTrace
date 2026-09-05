@@ -1,7 +1,7 @@
 import "server-only";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_REPOSITORY_URL } from "@/lib/env/server";
+import { publicRepositoryUrl } from "@/lib/env/server";
 import {
   documentTitle,
   mapLinks,
@@ -19,10 +19,6 @@ export interface LoadedDoc {
   toc: TocEntry[];
   /** The file on GitHub, for an "edit" link. */
   sourceUrl: string;
-}
-
-function repositoryUrl(): string {
-  return (process.env.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL).replace(/\/+$/, "");
 }
 
 /**
@@ -48,7 +44,7 @@ export function rewriteDocLink(href: string, repoUrl: string): string {
 export function loadDoc(slug: string): LoadedDoc | null {
   const entry = findDoc(slug);
   if (!entry) return null;
-  const repo = repositoryUrl();
+  const repo = publicRepositoryUrl();
   const source = readFileSync(join(process.cwd(), "docs", entry.file), "utf8");
   const blocks = mapLinks(parseMarkdown(source), (href) => rewriteDocLink(href, repo));
   return {

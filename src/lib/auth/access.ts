@@ -1,4 +1,5 @@
 import type { Firestore } from "firebase-admin/firestore";
+import { cache } from "react";
 import type { Owner } from "@/lib/auth/session";
 import { serverEnv } from "@/lib/env/server";
 import { ApiError } from "@/lib/firetrace/errors";
@@ -36,8 +37,7 @@ export async function listProjectsFor(db: Firestore, owner: Owner): Promise<Proj
   return mine.filter((p) => canAccessProject(owner, p, allowedEmails));
 }
 
-/** Project the caller may open, or null. Validates the id shape too. */
-export async function getAccessibleProject(
+async function loadAccessibleProject(
   db: Firestore,
   owner: Owner,
   projectId: string,
@@ -48,13 +48,22 @@ export async function getAccessibleProject(
   return project;
 }
 
-/** Project the caller may open, or a 404 ApiError. */
+/**
+ * Project the caller may open, or null. Validates the id shape too. Memoized
+ * per request so the project layout and its page share one document read.
+ */
+export const getAccessibleProject = cache(loadAccessibleProject);
+
+/**
+ * Project the caller may open, or a 404 ApiError. Not memoized: server actions
+ * and route handlers read fresh, so a mutation never sees a stale project.
+ */
 export async function requireAccessibleProject(
   db: Firestore,
   owner: Owner,
   projectId: string,
 ): Promise<Project> {
-  const project = await getAccessibleProject(db, owner, projectId);
+  const project = await loadAccessibleProject(db, owner, projectId);
   if (!project) throw new ApiError(404, "not_found", "Project not found.");
   return project;
 }

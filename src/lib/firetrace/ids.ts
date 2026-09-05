@@ -12,7 +12,6 @@ export const PROJECT_ID_RE = /^[0-9a-f]{24}$/;
 export const KEY_ID_RE = /^[0-9a-f]{16}$/;
 export const SCORE_ID_RE = /^[0-9a-f]{16}$/;
 export const EVALUATOR_ID_RE = /^[0-9a-f]{16}$/;
-export const RUN_ID_RE = /^[0-9a-f]{16}$/;
 
 export function normalizeHexId(value: string, length: number): string | null {
   if (typeof value !== "string" || value.length !== length) return null;

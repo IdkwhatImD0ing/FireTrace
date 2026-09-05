@@ -1,5 +1,5 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
-import { ApiError, isQuotaExhausted } from "./errors";
+import { ApiError, rethrowQuotaExhausted } from "./errors";
 import type { NormalizedIngest, NormalizedSpan, NormalizedTrace } from "./normalize";
 import {
   chooseKey,
@@ -185,13 +185,6 @@ export async function ingestTrace(
       return { created: true, duplicate: false } as const;
     });
   } catch (err) {
-    if (isQuotaExhausted(err)) {
-      throw new ApiError(
-        429,
-        "quota_exhausted",
-        "Firestore refused the write because a quota is exhausted. Existing data is preserved; free space or upgrade the Firebase plan.",
-      );
-    }
-    throw err;
+    rethrowQuotaExhausted(err);
   }
 }

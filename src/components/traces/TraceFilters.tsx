@@ -1,18 +1,12 @@
 import Link from "next/link";
 import { STATUSES } from "@/lib/firetrace/schema";
 import type { TraceFacets, TraceFilters as Filters, TraceSort } from "@/lib/firetrace/types";
+import { withParams } from "@/lib/search-params";
 
 function toLocalInput(iso: string | undefined): string {
   if (!iso) return "";
   // datetime-local wants no timezone; keep UTC wall time for determinism.
   return iso.slice(0, 16);
-}
-
-function href(base: string, params: Record<string, string | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
-  const qs = search.toString();
-  return qs ? `${base}?${qs}` : base;
 }
 
 /** Plain GET form: filter state lives in the URL, so views can be bookmarked. */
@@ -37,20 +31,20 @@ export function TraceFilters({
     tag: filters.tag,
   };
   const presets = [
-    { label: "Newest", to: href(base, { ...filters }), active: sort === "newest" },
+    { label: "Newest", to: withParams(base, { ...filters }), active: sort === "newest" },
     {
       label: "Slowest",
-      to: href(base, { ...compatible, sort: "slowest" }),
+      to: withParams(base, { ...compatible, sort: "slowest" }),
       active: sort === "slowest",
     },
     {
       label: "Costliest",
-      to: href(base, { ...compatible, sort: "costliest" }),
+      to: withParams(base, { ...compatible, sort: "costliest" }),
       active: sort === "costliest",
     },
     {
       label: "Errors only",
-      to: href(base, {
+      to: withParams(base, {
         ...(sort === "newest" ? filters : compatible),
         status: "error",
         sort: sort === "newest" ? undefined : sort,

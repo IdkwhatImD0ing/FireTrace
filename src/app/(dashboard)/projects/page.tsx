@@ -17,8 +17,10 @@ export default async function ProjectsPage() {
   const owner = await requireOwnerOrRedirect();
   const env = serverEnv();
   const db = adminDb();
-  const projects = await listProjectsFor(db, owner);
-  const trial = owner.role === "trial" ? await getTrialUsage(db, trialSubject(owner.email)) : null;
+  const [projects, trial] = await Promise.all([
+    listProjectsFor(db, owner),
+    owner.role === "trial" ? getTrialUsage(db, trialSubject(owner.email)) : null,
+  ]);
   const canCreate = owner.role === "owner" || projects.length < TRIAL_MAX_PROJECTS;
   const totalBytes = projects.reduce((sum, p) => sum + p.estimatedBytes, 0);
   const level = storageLevel(totalBytes, env.storageLimitBytes);
@@ -70,7 +72,6 @@ export default async function ProjectsPage() {
           }
         >
           <CreateProjectDialog primary />
-          <Link href="/projects" className="hidden" aria-hidden />
         </EmptyState>
       ) : (
         <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

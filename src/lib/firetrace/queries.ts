@@ -1,4 +1,5 @@
 import { FieldPath, Timestamp, type Firestore, type Query } from "firebase-admin/firestore";
+import { parseUtcDateParam, trimmedParam, withParams } from "@/lib/search-params";
 import { toSpanDetail, toTraceDetail, toTraceSummary } from "./convert";
 import { ApiError } from "./errors";
 import { LIMITS, STATUSES, type TraceStatus } from "./schema";
@@ -23,18 +24,35 @@ const SORT_FIELD: Record<TraceSort, string> = {
   costliest: "costUsd",
 };
 
+/**
+ * Everything `toTraceSummary` reads. The list queries project to these so the
+ * (possibly large) input, output and metadata payloads never leave Firestore.
+ */
+const TRACE_SUMMARY_FIELDS = [
+  "name",
+  "status",
+  "startedAt",
+  "endedAt",
+  "durationMs",
+  "provider",
+  "model",
+  "sessionId",
+  "userId",
+  "tags",
+  "usage",
+  "costUsd",
+  "spanCount",
+  "errorCount",
+  "estimatedBytes",
+  "ingestedAt",
+  "scores",
+] as const;
+
 /** Opaque cursor: base64url of [startedAt epoch ms, trace id]. */
 export function encodeCursor(startedAt: string, traceId: string): string {
   return Buffer.from(JSON.stringify([Date.parse(startedAt), traceId]), "utf8").toString(
     "base64url",
   );
-}
-
-export function decodeCursor(cursor: string): { startedAt: Timestamp; traceId: string } | null {
-  const decoded = decodeSortCursor(cursor, "newest");
-  return decoded
-    ? { startedAt: Timestamp.fromMillis(decoded.value), traceId: decoded.traceId }
-    : null;
 }
 
 /**
@@ -48,7 +66,8 @@ export function cursorFor(trace: TraceSummary, sort: TraceSort): string {
   return Buffer.from(JSON.stringify([value, trace.id, sort]), "utf8").toString("base64url");
 }
 
-function decodeSortCursor(
+/** Inverse of `cursorFor`; null for garbage, a malformed payload, or a cursor minted under another sort. */
+export function decodeSortCursor(
   cursor: string,
   sort: TraceSort,
 ): { value: number; traceId: string } | null {
@@ -70,17 +89,9 @@ function decodeSortCursor(
 export function parseTraceFilters(
   params: Record<string, string | string[] | undefined>,
 ): TraceFilters {
-  const first = (key: string, max: number = LIMITS.maxIdentifierLength) => {
-    const v = params[key];
-    const s = Array.isArray(v) ? v[0] : v;
-    return s && s.trim() ? s.trim().slice(0, max) : undefined;
-  };
+  const first = (key: string, max: number = LIMITS.maxIdentifierLength) =>
+    trimmedParam(params, key, max);
   const status = first("status");
-  // datetime-local values carry no zone; the UI labels them UTC, so treat them as UTC.
-  const asUtc = (v: string | undefined) =>
-    v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v) ? `${v}Z` : v;
-  const from = asUtc(first("from"));
-  const to = asUtc(first("to"));
   return {
     status:
       status && (STATUSES as readonly string[]).includes(status)
@@ -91,18 +102,14 @@ export function parseTraceFilters(
     userId: first("userId"),
     name: first("name", LIMITS.maxNameLength),
     tag: first("tag", LIMITS.maxTagLength),
-    from: from && !Number.isNaN(Date.parse(from)) ? new Date(from).toISOString() : undefined,
-    to: to && !Number.isNaN(Date.parse(to)) ? new Date(to).toISOString() : undefined,
+    from: parseUtcDateParam(first("from")),
+    to: parseUtcDateParam(first("to")),
   };
 }
 
 /** The query string that reproduces a list view: filters plus a non-default sort, without cursors. */
 export function traceListQuery(filters: TraceFilters, sort: TraceSort): string {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(filters)) if (v) search.set(k, v);
-  if (sort !== "newest") search.set("sort", sort);
-  const qs = search.toString();
-  return qs ? `?${qs}` : "";
+  return withParams("", { ...filters, sort: sort === "newest" ? undefined : sort });
 }
 
 /** Unknown or missing values mean newest first. */
@@ -141,7 +148,10 @@ export async function listTraces(
   if (filters.userId) q = q.where("userId", "==", filters.userId);
   if (filters.from) q = q.where("startedAt", ">=", Timestamp.fromDate(new Date(filters.from)));
   if (filters.to) q = q.where("startedAt", "<=", Timestamp.fromDate(new Date(filters.to)));
-  q = q.orderBy(SORT_FIELD[sort], "desc").orderBy(FieldPath.documentId(), "desc");
+  q = q
+    .orderBy(SORT_FIELD[sort], "desc")
+    .orderBy(FieldPath.documentId(), "desc")
+    .select(...TRACE_SUMMARY_FIELDS);
 
   const position = (cursor: string) => {
     const decoded = decodeSortCursor(cursor, sort);
@@ -245,9 +255,4 @@ export async function recentFacets(db: Firestore, projectId: string): Promise<Tr
     }
   }
   return { names: [...names].sort(), models: [...models].sort(), tags: [...tags].sort() };
-}
-
-/** Distinct models seen in recent traces. Kept for callers of the older shape. */
-export async function recentModels(db: Firestore, projectId: string): Promise<string[]> {
-  return (await recentFacets(db, projectId)).models;
 }

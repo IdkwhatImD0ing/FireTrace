@@ -1,4 +1,5 @@
-import { FieldValue, Timestamp, type DocumentData, type Firestore } from "firebase-admin/firestore";
+import { Timestamp, type DocumentData, type Firestore } from "firebase-admin/firestore";
+import { iso, str } from "@/lib/firetrace/convert";
 import { ApiError } from "@/lib/firetrace/errors";
 import { isEvaluatorId, newEvaluatorId } from "@/lib/firetrace/ids";
 import { outputTypeSchema, type EvalRun, type Evaluator, type EvaluatorInput } from "./schema";
@@ -11,16 +12,6 @@ import { outputTypeSchema, type EvalRun, type Evaluator, type EvaluatorInput } f
 
 export const EVALUATORS_COLLECTION = "evaluators";
 export const EVAL_RUNS_COLLECTION = "evalRuns";
-
-function iso(v: unknown): string | null {
-  if (v instanceof Timestamp) return v.toDate().toISOString();
-  if (v instanceof Date) return v.toISOString();
-  return null;
-}
-
-function str(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
 
 export function toEvaluator(id: string, d: DocumentData): Evaluator {
   const outputType = outputTypeSchema.safeParse(d.outputType);
@@ -161,5 +152,3 @@ export async function listEvalRuns(
 export function evalRunRef(db: Firestore, projectId: string, runId: string) {
   return db.collection("projects").doc(projectId).collection(EVAL_RUNS_COLLECTION).doc(runId);
 }
-
-export const serverTimestamp = () => FieldValue.serverTimestamp();

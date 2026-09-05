@@ -1,4 +1,4 @@
-import { intParam, withApiKey } from "@/lib/firetrace/api-handler";
+import { intParam, readJsonBody, withApiKey } from "@/lib/firetrace/api-handler";
 import { ApiError, jsonResponse } from "@/lib/firetrace/errors";
 import { ingestTrace } from "@/lib/firetrace/ingest";
 import { normalizeIngestBody } from "@/lib/firetrace/normalize";
@@ -9,7 +9,6 @@ import {
   parseTraceFilters,
   parseTraceSort,
 } from "@/lib/firetrace/queries";
-import { LIMITS } from "@/lib/firetrace/schema";
 import { log } from "@/lib/log";
 
 export const runtime = "nodejs";
@@ -21,21 +20,7 @@ export const runtime = "nodejs";
  */
 export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId }, request) => {
   const startedAt = Date.now();
-  const tooLarge = () =>
-    new ApiError(413, "payload_too_large", `Request body exceeds ${LIMITS.maxRequestBytes} bytes.`);
-
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > LIMITS.maxRequestBytes) throw tooLarge();
-
-  const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > LIMITS.maxRequestBytes) throw tooLarge();
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    throw new ApiError(400, "invalid_json", "Request body must be valid JSON.");
-  }
-
+  const body = await readJsonBody(request);
   const normalized = normalizeIngestBody(body);
   if (!normalized.ok) {
     const status = normalized.error.code === "payload_too_large" ? 413 : 400;

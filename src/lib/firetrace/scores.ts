@@ -6,12 +6,14 @@ import {
   type Firestore,
   type Query,
 } from "firebase-admin/firestore";
+import { parseUtcDateParam, trimmedParam } from "@/lib/search-params";
 import { toScore } from "./convert";
-import { ApiError, isQuotaExhausted } from "./errors";
+import { ApiError, rethrowQuotaExhausted } from "./errors";
 import { isScoreId, newScoreId } from "./ids";
 import { byteLength } from "./normalize";
 import {
   describeIssues,
+  LIMITS,
   SCORE_LIMITS,
   scoreInputSchema,
   scoreNameSchema,
@@ -66,20 +68,12 @@ export function normalizeScoreInput(body: unknown): NormalizeScoreResult {
 export function parseScoreFilters(
   params: Record<string, string | string[] | undefined>,
 ): ScoreFilters {
-  const first = (key: string) => {
-    const v = params[key];
-    const s = Array.isArray(v) ? v[0] : v;
-    return s && s.trim() ? s.trim().slice(0, 200) : undefined;
-  };
+  const first = (key: string) => trimmedParam(params, key, LIMITS.maxIdentifierLength);
   const name = first("name");
-  const asUtc = (v: string | undefined) =>
-    v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v) ? `${v}Z` : v;
-  const from = asUtc(first("from"));
-  const to = asUtc(first("to"));
   return {
     name: name && scoreNameSchema.safeParse(name).success ? name : undefined,
-    from: from && !Number.isNaN(Date.parse(from)) ? new Date(from).toISOString() : undefined,
-    to: to && !Number.isNaN(Date.parse(to)) ? new Date(to).toISOString() : undefined,
+    from: parseUtcDateParam(first("from")),
+    to: parseUtcDateParam(first("to")),
   };
 }
 
@@ -135,17 +129,6 @@ function scoreDeltas(
         ? chooseKey(values, label, STATS_CAPS.scoreLabels)
         : existingKey(values, label);
   return scoreStatsDeltas(score, { name: nameKey, label: labelKey });
-}
-
-function quotaError(err: unknown): never {
-  if (isQuotaExhausted(err)) {
-    throw new ApiError(
-      429,
-      "quota_exhausted",
-      "Firestore refused the write because a quota is exhausted. Existing data is preserved; free space or upgrade the Firebase plan.",
-    );
-  }
-  throw err;
 }
 
 /**
@@ -227,7 +210,7 @@ export async function addScore(
       return toScore(scoreRef.id, doc);
     });
   } catch (err) {
-    return quotaError(err);
+    return rethrowQuotaExhausted(err);
   }
 }
 
@@ -375,7 +358,7 @@ export async function deleteScore(
       }
     });
   } catch (err) {
-    quotaError(err);
+    rethrowQuotaExhausted(err);
   }
 }
 
@@ -400,17 +383,20 @@ export async function deleteScoresForTrace(
       continue;
     }
     const day = statsDayId(createdAt.toDate().toISOString());
-    byDay.set(day, [...(byDay.get(day) ?? []), { name, value }]);
+    const scores = byDay.get(day);
+    if (scores) scores.push({ name, value });
+    else byDay.set(day, [{ name, value }]);
   }
   const batch = db.batch();
   for (const d of snap.docs) batch.delete(d.ref);
-  for (const [day, scores] of byDay) {
-    const dayRef = db.collection("projects").doc(projectId).collection(STATS_COLLECTION).doc(day);
-    const daySnap = await dayRef.get();
+  const days = [...byDay.keys()];
+  const stats = db.collection("projects").doc(projectId).collection(STATS_COLLECTION);
+  const daySnaps = days.length ? await db.getAll(...days.map((day) => stats.doc(day))) : [];
+  for (const daySnap of daySnaps) {
     if (!daySnap.exists) continue;
     const data = daySnap.data() ?? {};
-    const deltas = scores.flatMap((s) => scoreDeltas(data, s, "remove"));
-    batch.set(dayRef, statsIncrements(deltas, -1), { merge: true });
+    const deltas = (byDay.get(daySnap.id) ?? []).flatMap((s) => scoreDeltas(data, s, "remove"));
+    batch.set(daySnap.ref, statsIncrements(deltas, -1), { merge: true });
   }
   await batch.commit();
   return snap.size;

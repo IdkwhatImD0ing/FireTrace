@@ -79,7 +79,6 @@ export const spanEventSchema = z.strictObject({
   timestamp: isoTimestamp,
   attributes: jsonObjectSchema.optional(),
 });
-export type SpanEventInput = z.infer<typeof spanEventSchema>;
 
 export const spanInputSchema = z.strictObject({
   id: hex(16, "span id"),

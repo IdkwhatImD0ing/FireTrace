@@ -1,4 +1,4 @@
-import type { SpanKind, TraceStatus } from "./schema";
+import type { SpanKind } from "./schema";
 
 /**
  * Categorical colors for span kinds, validated against the dark surface
@@ -16,10 +16,4 @@ export const KIND_COLOR: Record<SpanKind, string> = {
   embedding: "#008300",
   reranker: "#9085e9",
   custom: "#8a857c",
-};
-
-export const STATUS_LABEL: Record<TraceStatus, string> = {
-  ok: "ok",
-  error: "error",
-  unset: "unset",
 };

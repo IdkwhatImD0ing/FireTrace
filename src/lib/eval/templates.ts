@@ -79,7 +79,3 @@ export const BUILT_IN_TEMPLATES: readonly EvaluatorTemplate[] = [
     outputType: { kind: "numeric", min: 0, max: 1 },
   },
 ];
-
-export function findTemplate(id: string): EvaluatorTemplate | undefined {
-  return BUILT_IN_TEMPLATES.find((t) => t.id === id);
-}

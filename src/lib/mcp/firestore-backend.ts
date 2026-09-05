@@ -176,9 +176,4 @@ export class FirestoreBackend implements TraceBackend {
   async ingestSchema(): Promise<unknown> {
     return ingestRequestJsonSchema();
   }
-
-  /** Exposed for logging. */
-  get keyId(): string {
-    return this.auth.keyId;
-  }
 }

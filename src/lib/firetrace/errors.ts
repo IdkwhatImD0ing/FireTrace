@@ -72,3 +72,15 @@ export function isQuotaExhausted(err: unknown): boolean {
   const code = (err as { code?: unknown })?.code;
   return code === 8 || code === "resource-exhausted" || code === "RESOURCE_EXHAUSTED";
 }
+
+/** Rethrow a failed write: exhausted quota becomes a 429 ApiError, anything else passes through. */
+export function rethrowQuotaExhausted(err: unknown): never {
+  if (isQuotaExhausted(err)) {
+    throw new ApiError(
+      429,
+      "quota_exhausted",
+      "Firestore refused the write because a quota is exhausted. Existing data is preserved; free space or upgrade the Firebase plan.",
+    );
+  }
+  throw err;
+}
