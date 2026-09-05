@@ -23,7 +23,7 @@ export function alerts(page: Page): Locator {
 /** Wrapping labels include the control's own value in its name ("Status any"), so match the prefix. */
 export function filterControl(
   page: Page,
-  label: "Status" | "Model" | "Session ID" | "User ID",
+  label: "Status" | "Model" | "Trace name" | "Tag" | "Session ID" | "User ID",
 ): Locator {
   return page.getByLabel(new RegExp(`^${label}`));
 }

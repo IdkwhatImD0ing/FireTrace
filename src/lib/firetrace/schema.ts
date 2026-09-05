@@ -126,6 +126,55 @@ export const ingestRequestSchema = z.strictObject({
 });
 export type IngestRequest = z.infer<typeof ingestRequestSchema>;
 
+// ---------------------------------------------------------------------------
+// Scores (POST /api/v1/traces/{traceId}/scores): judgements attached after the run.
+
+export const SCORE_DATA_TYPES = ["numeric", "categorical", "boolean"] as const;
+export type ScoreDataType = (typeof SCORE_DATA_TYPES)[number];
+
+export const SCORE_SOURCES = ["api", "annotation", "eval"] as const;
+export type ScoreSource = (typeof SCORE_SOURCES)[number];
+
+export const SCORE_LIMITS = {
+  maxNameLength: 64,
+  maxValueLength: 200,
+  maxCommentLength: 2000,
+  maxPerTrace: 100,
+} as const;
+
+/** Score names become field names in the trace's `scores` map, so no dots or spaces. */
+export const scoreNameSchema = z
+  .string()
+  .min(1)
+  .max(SCORE_LIMITS.maxNameLength)
+  .regex(/^[A-Za-z0-9_-]+$/, { message: "may contain only letters, digits, '_' and '-'" });
+
+const SCORE_VALUE_TYPE: Record<ScoreDataType, "number" | "string" | "boolean"> = {
+  numeric: "number",
+  categorical: "string",
+  boolean: "boolean",
+};
+
+export const scoreInputSchema = z
+  .strictObject({
+    name: scoreNameSchema,
+    dataType: z.enum(SCORE_DATA_TYPES),
+    value: z.union([z.number(), z.string().min(1).max(SCORE_LIMITS.maxValueLength), z.boolean()]),
+    comment: z.string().max(SCORE_LIMITS.maxCommentLength).optional(),
+    spanId: hex(16, "spanId").optional(),
+  })
+  .superRefine((score, ctx) => {
+    const expected = SCORE_VALUE_TYPE[score.dataType];
+    if (typeof score.value !== expected) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["value"],
+        message: `must be a ${expected} when dataType is "${score.dataType}"`,
+      });
+    }
+  });
+export type ScoreInput = z.infer<typeof scoreInputSchema>;
+
 /** Human-readable summary of a Zod failure, without echoing payload values. */
 export function describeIssues(error: z.ZodError): string {
   return error.issues

@@ -1,10 +1,21 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore";
-import type { JsonObject, JsonValue, SpanKind, TraceStatus, Usage } from "./schema";
-import { SPAN_KINDS, STATUSES } from "./schema";
+import type {
+  JsonObject,
+  JsonValue,
+  ScoreDataType,
+  ScoreSource,
+  SpanKind,
+  TraceStatus,
+  Usage,
+} from "./schema";
+import { SCORE_DATA_TYPES, SCORE_SOURCES, SPAN_KINDS, STATUSES } from "./schema";
 import { scopesFromDocument } from "./scopes";
 import type {
   ApiKeySummary,
   Project,
+  Score,
+  ScoreSummary,
+  ScoreValue,
   SpanDetail,
   SpanEvent,
   TraceDetail,
@@ -46,6 +57,50 @@ function usage(v: unknown): Usage {
   if (typeof o.outputTokens === "number") out.outputTokens = o.outputTokens;
   if (typeof o.totalTokens === "number") out.totalTokens = o.totalTokens;
   return out;
+}
+
+function scoreValue(v: unknown): ScoreValue | null {
+  return typeof v === "number" || typeof v === "string" || typeof v === "boolean" ? v : null;
+}
+
+function scoreDataType(v: unknown, value: ScoreValue): ScoreDataType {
+  const fallback: ScoreDataType =
+    typeof value === "string" ? "categorical" : typeof value === "boolean" ? "boolean" : "numeric";
+  return enumOf<ScoreDataType>(v, SCORE_DATA_TYPES, fallback);
+}
+
+function scoreSummaries(v: unknown): Record<string, ScoreSummary> {
+  const out: Record<string, ScoreSummary> = {};
+  for (const [name, raw] of Object.entries(obj(v))) {
+    const s = obj(raw);
+    const value = scoreValue(s.value);
+    const scoreId = str(s.scoreId);
+    if (value === null || !scoreId) continue;
+    out[name] = {
+      scoreId,
+      dataType: scoreDataType(s.dataType, value),
+      value,
+      evaluatorId: str(s.evaluatorId),
+    };
+  }
+  return out;
+}
+
+export function toScore(id: string, d: DocumentData): Score {
+  const value = scoreValue(d.value) ?? 0;
+  return {
+    id,
+    traceId: str(d.traceId) ?? "",
+    spanId: str(d.spanId),
+    name: str(d.name) ?? "(unnamed)",
+    dataType: scoreDataType(d.dataType, value),
+    value,
+    comment: str(d.comment),
+    source: enumOf<ScoreSource>(d.source, SCORE_SOURCES, "api"),
+    evaluatorId: str(d.evaluatorId),
+    runId: str(d.runId),
+    createdAt: iso(d.createdAt) ?? new Date(0).toISOString(),
+  };
 }
 
 export function toProject(id: string, d: DocumentData): Project {
@@ -104,6 +159,7 @@ export function toTraceSummary(id: string, d: DocumentData): TraceSummary {
     errorCount: num(d.errorCount),
     estimatedBytes: num(d.estimatedBytes),
     ingestedAt: iso(d.ingestedAt),
+    scores: scoreSummaries(d.scores),
   };
 }
 

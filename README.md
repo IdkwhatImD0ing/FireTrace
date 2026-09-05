@@ -16,11 +16,14 @@ Concretely, the codebase has no `expireAt` field, no Firestore TTL policy, no cl
 
 - Multiple **projects** as trace namespaces inside one deployment.
 - Per-project **API keys** (`ft_live_…`) that are shown once, stored only as an HMAC digest, carry **scopes** (`traces:write`, `traces:read`, `traces:delete`) and an optional expiry, and can be revoked or rotated.
-- A language-neutral **REST API** ([docs/api.md](docs/api.md), OpenAPI at `/api/v1/openapi.json`): `POST /api/v1/traces` records one complete trace with idempotent retries; `PATCH /api/v1/traces/{id}` merges keys into that trace's `metadata`, the one mutable part, so ratings and evaluations that arrive after the run have somewhere to go; `GET` routes list and read traces and the project; `DELETE` removes a trace explicitly.
+- A language-neutral **REST API** ([docs/api.md](docs/api.md), OpenAPI at `/api/v1/openapi.json`): `POST /api/v1/traces` records one complete trace with idempotent retries; `POST /api/v1/traces/{id}/scores` attaches a rating, verdict, or eval result; `PATCH /api/v1/traces/{id}` merges free-form keys into that trace's `metadata`; `GET` routes list and read traces, scores, and the project; `DELETE` removes a trace or a score explicitly.
+- **Scores**: typed judgements (numeric, categorical, or boolean, with a comment and a source) attached to a trace after the run. They are indexed, listable per trace or across the project, and summarized on every trace as the newest score per name.
+- **Evaluators** (LLM-as-a-judge, [docs/evaluators.md](docs/evaluators.md)): prompt templates with `{{input}}`/`{{output}}` variables, answered by any OpenAI-compatible endpoint you configure, tested on a trace before saving, and run on one trace or over the filtered list. Verdicts land as scores with the judge's reasoning; every run is logged with its token usage.
 - An **MCP server** ([docs/mcp.md](docs/mcp.md)) so AI agents can list, inspect, record, annotate, and delete traces: a remote endpoint at `/api/mcp` on every deployment plus a stdio bridge (`packages/mcp-server`, `@firetrace/mcp`). Tools follow the key's scopes.
-- A small **TypeScript SDK** (`packages/sdk-js`) with retries, redaction, content truncation, safe error capture, and a read client for the API that also patches trace metadata.
-- A **trace list** with status, model, session, user, and time-range filters, URL-backed filter state, and cursor pagination (50 per page).
-- A **trace page** with a span tree and duration waterfall, an inspector (Overview, Input, Output, Attributes, Events, Error), and a canonical-JSON download.
+- A small **TypeScript SDK** (`packages/sdk-js`) with retries, redaction, content truncation, safe error capture, and a read client for the API that also adds scores and patches trace metadata.
+- A **dashboard** per project: traces, error rate, cost and tokens over the last 24 hours, 7, 14, 30 or 90 days, cost and tokens by model, latency percentiles by trace name, and score summaries, all from per-day rollups written at ingest (no charting library, no extra reads per trace).
+- A **trace list** with status, model, trace-name, tag, session, user, and time-range filters, newest/slowest/costliest presets, URL-backed filter state, and cursor pagination (50 per page); session and user cells link to their filter. A per-day histogram of the last 14 days sits above the list (each bar links to that day), and the current page exports as CSV.
+- A **trace page** with a span tree and duration waterfall (search by span name, collapse subtrees, tokens and cost inline on each span), an inspector (Overview, Input, Output, Attributes, Events, Error, Scores) that renders chat-shaped input and output as messages with a JSON toggle, newer/older navigation in the list's order (`[` and `]`), and a canonical-JSON download.
 - **Owner-only access**: Firebase sign-in, a server-verified session cookie, and an email allowlist. Firestore rules deny every direct client read and write.
 - **Storage estimate** per project with warnings at 70% and 90% of a configurable allowance (default: the 1 GiB free tier).
 - Local development against the Firebase Auth and Firestore emulators, with a seed script and an example trace sender.
@@ -54,12 +57,16 @@ One FireTrace deployment connects to one Firebase project. Inside it, `projects/
 
 Firestore collections:
 
-| Path                                            | Contents                                                                                                                                                           |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                                    |
-| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                                              |
-| `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, metadataUpdatedAt, usage, cost, counts, bodyHash, estimatedBytes) |
-| `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                                      |
+| Path                                            | Contents                                                                                                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects/{projectId}`                          | name, slug, description, ownerUid, traceCount, spanCount, estimatedBytes, lastTraceAt, settings                                                                                                |
+| `apiKeys/{keyId}`                               | projectId, label, keyHash (HMAC-SHA-256), lastFour, scopes, expiresAt, lastUsedAt, createdAt, createdByUid, revokedAt                                                                          |
+| `projects/{projectId}/traces/{traceId}`         | the normalized trace (name, status, timing, model, session, user, tags, input, output, metadata, metadataUpdatedAt, usage, cost, counts, bodyHash, estimatedBytes)                             |
+| `projects/{projectId}/traces/{traceId}/spans/…` | one document per span (kind, status, timing, provider, model, input, output, attributes, events, usage, cost)                                                                                  |
+| `projects/{projectId}/scores/{scoreId}`         | one document per score (traceId, spanId, name, dataType, value, comment, source, evaluatorId, runId, createdAt); the trace carries the newest score per name                                   |
+| `projects/{projectId}/evaluators/{evaluatorId}` | an LLM-as-a-judge definition (name, description, promptTemplate, outputType, model)                                                                                                            |
+| `projects/{projectId}/evalRuns/{runId}`         | one document per judge call (evaluatorId, evaluatorName, traceId, trigger, status, model, usage, durationMs, error, scoreId)                                                                   |
+| `projects/{projectId}/stats/{YYYY-MM-DD}`       | per-day rollup for the dashboard (counts, errors, tokens, cost, hourly buckets, per-model and per-name totals with latency histograms, per-score sums); rebuilt by `scripts/backfill-stats.ts` |
 
 Composite indexes and the single-field exemptions for large payload fields live in `firestore.indexes.json`.
 
@@ -217,7 +224,7 @@ STEPS
    Tell me to store the pepper somewhere safe (it is in .env.local): changing it later invalidates every API key.
    NEXT_PUBLIC_APP_URL=http://localhost:3000
    FIRETRACE_USE_EMULATORS=false and NEXT_PUBLIC_FIRETRACE_USE_EMULATORS=false
-   Leave FIRETRACE_STORAGE_LIMIT_BYTES unset (optional storage-warning allowance in bytes; the default is the 1 GiB free tier). Leave FIRETRACE_TRIAL_TRACE_LIMIT unset unless I say I want strangers to be able to sign in and try a few traces on my instance.
+   Leave FIRETRACE_STORAGE_LIMIT_BYTES unset (optional storage-warning allowance in bytes; the default is the 1 GiB free tier). Leave FIRETRACE_TRIAL_TRACE_LIMIT unset unless I say I want strangers to be able to sign in and try a few traces on my instance. Leave FIRETRACE_EVAL_BASE_URL, FIRETRACE_EVAL_API_KEY and FIRETRACE_EVAL_MODEL unset unless I say I want LLM-as-a-judge evaluators; they point at any OpenAI-compatible chat-completions endpoint and are set all together or not at all.
    Then verify locally: start `pnpm dev` in the background, GET http://localhost:3000/api/health (curl on macOS/Linux; Invoke-RestMethod on PowerShell) and confirm firebaseConfigured, authConfigured, and ingestConfigured are all true (the response lists any problems outside production). If port 3000 is busy, use `pnpm exec next dev --port 3001` and adjust the URL. Afterwards stop the dev server and make sure nothing still listens on the port: macOS/Linux `lsof -ti :3000 | xargs kill`; PowerShell `Get-NetTCPConnection -LocalPort 3000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`.
 
 9. Create the Vercel project and set its environment variables (Production environment).
@@ -264,17 +271,20 @@ STEPS
 
 Environment variables (see `.env.example` for comments):
 
-| Variable                           | Scope   | Purpose                                                                                          |
-| ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
-| `NEXT_PUBLIC_FIREBASE_API_KEY`     | browser | Firebase Web app config for sign-in                                                              |
-| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | browser | Firebase Web app config for sign-in                                                              |
-| `NEXT_PUBLIC_FIREBASE_PROJECT_ID`  | both    | Firebase project id                                                                              |
-| `NEXT_PUBLIC_FIREBASE_APP_ID`      | browser | Firebase Web app config for sign-in                                                              |
-| `FIREBASE_SERVICE_ACCOUNT_BASE64`  | server  | Service-account JSON, base64-encoded; required in production                                     |
-| `DASHBOARD_ALLOWED_EMAILS`         | server  | Comma-separated owner emails; required in production                                             |
-| `FIRETRACE_KEY_PEPPER`             | server  | Random secret (32+ characters) used to HMAC API keys; changing it invalidates every existing key |
-| `NEXT_PUBLIC_APP_URL`              | both    | Canonical deployment origin, used for Origin checks and the copyable setup panel                 |
-| `FIRETRACE_STORAGE_LIMIT_BYTES`    | server  | Optional; storage-warning allowance, default 1 GiB                                               |
+| Variable                           | Scope   | Purpose                                                                                                       |
+| ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_FIREBASE_API_KEY`     | browser | Firebase Web app config for sign-in                                                                           |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | browser | Firebase Web app config for sign-in                                                                           |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID`  | both    | Firebase project id                                                                                           |
+| `NEXT_PUBLIC_FIREBASE_APP_ID`      | browser | Firebase Web app config for sign-in                                                                           |
+| `FIREBASE_SERVICE_ACCOUNT_BASE64`  | server  | Service-account JSON, base64-encoded; required in production                                                  |
+| `DASHBOARD_ALLOWED_EMAILS`         | server  | Comma-separated owner emails; required in production                                                          |
+| `FIRETRACE_KEY_PEPPER`             | server  | Random secret (32+ characters) used to HMAC API keys; changing it invalidates every existing key              |
+| `NEXT_PUBLIC_APP_URL`              | both    | Canonical deployment origin, used for Origin checks and the copyable setup panel                              |
+| `FIRETRACE_STORAGE_LIMIT_BYTES`    | server  | Optional; storage-warning allowance, default 1 GiB                                                            |
+| `FIRETRACE_EVAL_BASE_URL`          | server  | Optional; OpenAI-compatible base URL for LLM-as-a-judge evaluators (set all three `FIRETRACE_EVAL_*` or none) |
+| `FIRETRACE_EVAL_API_KEY`           | server  | Optional; bearer key for that endpoint                                                                        |
+| `FIRETRACE_EVAL_MODEL`             | server  | Optional; default judge model, overridable per evaluator                                                      |
 
 Do not set `FIRETRACE_USE_EMULATORS` or `NEXT_PUBLIC_FIRETRACE_USE_EMULATORS` to `true` on a hosted deployment; production refuses to start with the emulator flag enabled.
 
@@ -374,9 +384,10 @@ src/components/               UI (auth, dashboard shell, projects, settings, tra
 src/lib/env/                  server.ts (fail-closed server config), client.ts (browser config)
 src/lib/firebase/             admin.ts (Admin SDK, server-only), client.ts (Web SDK, sign-in only)
 src/lib/auth/                 session.ts (cookie + allowlist), origin.ts (Origin check)
-src/lib/firetrace/            schema, normalize, hash, ids, tree, api-keys, ingest, metadata, projects, queries, storage, sample
+src/lib/firetrace/            schema, normalize, hash, ids, tree, api-keys, ingest, metadata, scores, projects, queries, storage, sample
+src/lib/eval/                 evaluators: schema, templates, prompt rendering, fetch-based LLM client, run log
 src/lib/actions.ts            server actions for dashboard mutations
-scripts/                      seed-emulator, send-example-trace, backfill-feedback-metadata
+scripts/                      seed-emulator, send-example-trace, backfill-feedback-metadata, backfill-stats
 packages/sdk-js/              @firetrace/sdk (TypeScript, Node 22+)
 packages/mcp-server/          @firetrace/mcp (MCP tools, HTTP backend, stdio bridge)
 scripts/                      seed-emulator.ts, send-example-trace.ts
@@ -412,7 +423,8 @@ firestore.indexes.json        composite indexes and payload-field exemptions
 - One deployment serves one Firebase project. Every email in `DASHBOARD_ALLOWED_EMAILS` is a co-owner with access to every project; there are no per-project human permissions, invitations, or roles.
 - Traces are complete and, apart from `metadata`, immutable. There is no streaming or partial-trace update; re-sending a trace id with different content is rejected with `409`. `PATCH /api/v1/traces/{id}` merges into `metadata` only, shallowly and last-writer-wins: no history, no conflict detection, and `bodyHash` keeps describing the body as ingested rather than the document as it stands. `metadataUpdatedAt` is the only marker that a trace was edited afterwards.
 - Limits per trace: 200 spans, 50 events per span, 20 tags, a 2 MiB request body, and 750 KiB per stored document (see `docs/ingestion-api.md`).
-- Filters are exact matches on status, model, session id, and user id plus a time range. Metadata is deliberately not indexed, so it cannot be filtered, ordered, or aggregated by — deriving something like a satisfaction rate from patched metadata means fetching the traces and reducing them client-side. There is no full-text search over prompts or responses.
+- The dashboard reads per-day rollups written at ingest. Traces stored before the dashboard existed need one `pnpm exec tsx scripts/backfill-stats.ts --project <id> --apply` run; percentiles come from half-octave latency buckets (about ±19%), and days are UTC.
+- Filters are exact matches on status, model, trace name, tag, session id, and user id plus a time range; the slowest and costliest orderings combine only with status, model, name and tag. Metadata is deliberately not indexed, so it cannot be filtered, ordered, or aggregated by; scores are indexed and listable by name, but the trace list does not filter by score value yet. There is no full-text search over prompts or responses.
 - No native OTLP ingestion and no Python, Go, or Java SDK; non-JavaScript applications use the HTTP API directly.
 - No built-in price tables: `costUsd` is whatever the caller supplies.
 - No application-level rate limiting. `429` is returned only when Firestore reports an exhausted quota.

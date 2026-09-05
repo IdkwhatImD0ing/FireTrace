@@ -1,6 +1,14 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { ApiError, isQuotaExhausted } from "./errors";
 import type { NormalizedIngest, NormalizedSpan, NormalizedTrace } from "./normalize";
+import {
+  chooseKey,
+  STATS_CAPS,
+  STATS_COLLECTION,
+  statsDayId,
+  statsIncrements,
+  traceStatsDeltas,
+} from "./stats-rollup";
 import { effectivePlan, TRIAL_USAGE_COLLECTION, trialLimitMessage, trialSubject } from "./trial";
 
 export { authenticateApiKey, type AuthenticatedKey } from "./api-auth";
@@ -61,10 +69,18 @@ export async function ingestTrace(
 ): Promise<IngestOutcome> {
   const projectRef = db.collection("projects").doc(projectId);
   const traceRef = projectRef.collection("traces").doc(normalized.trace.id);
+  // Dashboard rollup for the trace's UTC day; read so the per-day key caps hold.
+  const dayRef = projectRef
+    .collection(STATS_COLLECTION)
+    .doc(statsDayId(normalized.trace.startedAt));
 
   try {
     return await db.runTransaction(async (tx) => {
-      const [projectSnap, traceSnap] = await Promise.all([tx.get(projectRef), tx.get(traceRef)]);
+      const [projectSnap, traceSnap, daySnap] = await Promise.all([
+        tx.get(projectRef),
+        tx.get(traceRef),
+        tx.get(dayRef),
+      ]);
       if (!projectSnap.exists) {
         throw new ApiError(
           401,
@@ -128,6 +144,31 @@ export async function ingestTrace(
       for (const span of normalized.spans) {
         tx.set(traceRef.collection("spans").doc(span.id), spanDocument(span));
       }
+      const t = normalized.trace;
+      const day = daySnap.data() ?? {};
+      tx.set(
+        dayRef,
+        statsIncrements(
+          traceStatsDeltas(
+            {
+              name: t.name,
+              status: t.status,
+              startedAt: t.startedAt,
+              durationMs: t.durationMs,
+              model: t.model ?? null,
+              usage: t.usage,
+              costUsd: t.costUsd ?? null,
+              spanCount: t.spanCount,
+            },
+            {
+              model: chooseKey(day.byModel, t.model ?? null, STATS_CAPS.models),
+              name: chooseKey(day.byName, t.name, STATS_CAPS.names),
+            },
+          ),
+          1,
+        ),
+        { merge: true },
+      );
       const incomingStart = toTimestamp(normalized.trace.startedAt);
       const previousLast = projectSnap.get("lastTraceAt");
       const lastTraceAt =

@@ -11,7 +11,8 @@ import {
   type AuthenticatedKey,
 } from "./api-auth";
 import { ApiError, errorResponse, errorToResponse } from "./errors";
-import { newRequestId } from "./ids";
+import { isTraceId, newRequestId } from "./ids";
+import { LIMITS } from "./schema";
 import type { KeyScope } from "./scopes";
 
 export interface ApiContext {
@@ -75,6 +76,29 @@ export function withApiKey(scope: KeyScope | null, handler: Handler) {
       return withAuthChallenge(errorToResponse(err, requestId, false));
     }
   };
+}
+
+/** The {traceId} path segment, lowercased; anything but 32 hex characters is a 404. */
+export function traceIdParam(params: Record<string, string>): string {
+  const traceId = (params.traceId ?? "").toLowerCase();
+  if (!isTraceId(traceId)) throw new ApiError(404, "not_found", "No such trace in this project.");
+  return traceId;
+}
+
+/** Read and parse a JSON body, refusing anything over LIMITS.maxRequestBytes. */
+export async function readJsonBody(request: NextRequest): Promise<unknown> {
+  const tooLarge = () =>
+    new ApiError(413, "payload_too_large", `Request body exceeds ${LIMITS.maxRequestBytes} bytes.`);
+  if (Number(request.headers.get("content-length") ?? "0") > LIMITS.maxRequestBytes) {
+    throw tooLarge();
+  }
+  const text = await request.text();
+  if (Buffer.byteLength(text, "utf8") > LIMITS.maxRequestBytes) throw tooLarge();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError(400, "invalid_json", "Request body must be valid JSON.");
+  }
 }
 
 /** Parse a positive integer query value with bounds. */

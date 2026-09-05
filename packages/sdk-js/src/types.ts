@@ -77,3 +77,23 @@ export interface IngestResponse {
 export interface IngestErrorBody {
   error: { code: string; message: string; requestId?: string };
 }
+
+// ---------------------------------------------------------------------------
+// Scores (POST /api/v1/traces/{traceId}/scores)
+
+export type ScoreDataType = "numeric" | "categorical" | "boolean";
+export type ScoreSource = "api" | "annotation" | "eval";
+export type ScoreValue = number | string | boolean;
+
+/** A judgement attached to a trace after the run: a rating, a verdict, an eval result. */
+export interface ScoreInput {
+  /** Letters, digits, '_' and '-', at most 64 characters. Doubles as the display name. */
+  name: string;
+  dataType: ScoreDataType;
+  /** A number for numeric, a string (at most 200 characters) for categorical, a boolean for boolean. */
+  value: ScoreValue;
+  /** Why the score was given; at most 2000 characters. */
+  comment?: string;
+  /** 16-hex span id when the score applies to one span rather than the whole trace. */
+  spanId?: string;
+}

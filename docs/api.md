@@ -11,11 +11,11 @@ Everything a program can do against a FireTrace deployment goes through the key-
 
 Keys are created per project under **Project → Settings → API keys**. Only an HMAC digest of the secret is stored, so the plaintext is shown once. Each key carries the scopes you choose at creation:
 
-| Scope           | Grants                                                                                      |
-| --------------- | ------------------------------------------------------------------------------------------- |
-| `traces:write`  | `POST /api/v1/traces`, `PATCH /api/v1/traces/{id}`; MCP `record_trace`, `get_ingest_schema` |
-| `traces:read`   | `GET /api/v1/traces`, `GET /api/v1/traces/{id}`, `GET /api/v1/project`; MCP read tools      |
-| `traces:delete` | `DELETE /api/v1/traces/{id}`; MCP `delete_trace`                                            |
+| Scope           | Grants                                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `traces:write`  | `POST /api/v1/traces`, `PATCH /api/v1/traces/{id}`, `POST /api/v1/traces/{id}/scores`; MCP `record_trace`, `add_score`, `get_ingest_schema`    |
+| `traces:read`   | `GET /api/v1/traces`, `GET /api/v1/traces/{id}`, `GET /api/v1/traces/{id}/scores`, `GET /api/v1/scores`, `GET /api/v1/project`; MCP read tools |
+| `traces:delete` | `DELETE /api/v1/traces/{id}`, `DELETE /api/v1/traces/{id}/scores/{scoreId}`; MCP `delete_trace`                                                |
 
 `GET /api/v1/key` needs no scope. Defaults for a new key are `traces:write` + `traces:read`; an SDK embedded in an application usually only needs `traces:write`. Keys created before scopes existed behave as `traces:write` only.
 
@@ -80,17 +80,22 @@ On instances that enable trial mode (`FIRETRACE_TRIAL_TRACE_LIMIT`), a trial acc
 
 Newest-first list with cursor pagination. Filters combine with AND.
 
-| Query       | Notes                                          |
-| ----------- | ---------------------------------------------- |
-| `status`    | `ok`, `error`, or `unset`                      |
-| `model`     | exact model string                             |
-| `sessionId` | exact                                          |
-| `userId`    | exact                                          |
-| `from`      | inclusive ISO-8601 lower bound on `startedAt`  |
-| `to`        | inclusive ISO-8601 upper bound on `startedAt`  |
-| `limit`     | 1–200, default 50                              |
-| `after`     | `nextCursor` of a previous page (older traces) |
-| `before`    | `prevCursor` of a previous page (newer traces) |
+| Query       | Notes                                                                         |
+| ----------- | ----------------------------------------------------------------------------- |
+| `status`    | `ok`, `error`, or `unset`                                                     |
+| `model`     | exact model string                                                            |
+| `name`      | exact trace name                                                              |
+| `tag`       | one tag the trace must carry                                                  |
+| `sessionId` | exact                                                                         |
+| `userId`    | exact                                                                         |
+| `from`      | inclusive ISO-8601 lower bound on `startedAt`                                 |
+| `to`        | inclusive ISO-8601 upper bound on `startedAt`                                 |
+| `sort`      | `newest` (default), `slowest` (by `durationMs`) or `costliest` (by `costUsd`) |
+| `limit`     | 1–200, default 50                                                             |
+| `after`     | `nextCursor` of a previous page (older traces)                                |
+| `before`    | `prevCursor` of a previous page (newer traces)                                |
+
+`slowest` and `costliest` combine only with `status`, `model`, `name` and `tag`; adding `sessionId`, `userId`, `from` or `to` to them is a `400 invalid_request`, because Firestore has no index for that combination. `costliest` omits traces that were recorded without `costUsd`. A cursor is only valid under the sort that produced it.
 
 ```json
 {
@@ -112,7 +117,15 @@ Newest-first list with cursor pagination. Filters combine with AND.
       "spanCount": 5,
       "errorCount": 1,
       "estimatedBytes": 4310,
-      "ingestedAt": "2026-09-02T19:01:05.004Z"
+      "ingestedAt": "2026-09-02T19:01:05.004Z",
+      "scores": {
+        "helpful": {
+          "scoreId": "9c1e7a2b3d4f5061",
+          "dataType": "boolean",
+          "value": true,
+          "evaluatorId": null
+        }
+      }
     }
   ],
   "nextCursor": "eyJz...",
@@ -125,11 +138,12 @@ Cursors are opaque; an unparseable cursor is `400 invalid_request`. Offsets are 
 
 ### `GET /api/v1/traces/{traceId}` — scope `traces:read`
 
-One trace with all of its spans, ordered by `startedAt` then id. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace that belongs to another project.
+One trace with all of its spans, ordered by `startedAt` then id, and all of its scores, newest first. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace that belongs to another project.
 
 ```json
 {
   "trace": { "...summary fields...", "input": {}, "output": {}, "metadata": {}, "metadataUpdatedAt": null, "bodyHash": "…" },
+  "scores": [],
   "spans": [
     {
       "id": "00f067aa0ba902b7",
@@ -187,13 +201,86 @@ Three things to know before you build on it:
 
 - The merge is **shallow** and **last-writer-wins**. A patched key replaces that top-level key outright, and two writers racing on the same key leave no trace of the loser.
 - `bodyHash` is **not** recomputed, so re-sending the original trace after a patch is still a `200` duplicate rather than a `409`. It describes the body as ingested, not the document as it stands.
-- Metadata is **not indexed**, so there is no metadata filter on `GET /api/v1/traces` and no server-side aggregation. Deriving a satisfaction rate means fetching traces and reducing them client-side.
+- Metadata is **not indexed**, so there is no metadata filter on `GET /api/v1/traces` and no server-side aggregation. For ratings, verdicts, and eval results use [scores](#scores) instead; keep metadata for free-form facts.
 
 `metadataUpdatedAt` on the trace (see `GET /api/v1/traces/{traceId}`) is the only marker distinguishing a trace that was edited after ingestion from one that was not.
 
+### Scores
+
+A score is a judgement attached to a trace after the run: a thumbs rating, a reviewer's verdict, an evaluator's result. Unlike metadata, scores are a first-class resource: each has a name, a typed value, an optional comment and a source, they are indexed, and they can be listed per trace or across the project. Scores are append-only. Adding a name again records a newer score, and every trace carries a `scores` summary with the newest score per name (see the list example above).
+
+#### `POST /api/v1/traces/{traceId}/scores` — scope `traces:write`
+
+```bash
+curl -X POST https://tracing.art3m1s.me/api/v1/traces/$TRACE_ID/scores \
+  -H "Authorization: Bearer $FIRETRACE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"helpful","dataType":"boolean","value":true,"comment":"answered the question"}'
+```
+
+| Field      | Notes                                                                                                 |
+| ---------- | ----------------------------------------------------------------------------------------------------- |
+| `name`     | letters, digits, `_` and `-`, at most 64 characters; doubles as the display name                      |
+| `dataType` | `numeric`, `categorical`, or `boolean`                                                                |
+| `value`    | a number for `numeric`, a string of at most 200 characters for `categorical`, a boolean for `boolean` |
+| `comment`  | optional, at most 2,000 characters                                                                    |
+| `spanId`   | optional 16-hex span id when the score applies to one span rather than the whole trace                |
+
+```json
+{
+  "ok": true,
+  "score": {
+    "id": "9c1e7a2b3d4f5061",
+    "traceId": "42f38ac8295345a7a12c4e3f60d6da23",
+    "spanId": null,
+    "name": "helpful",
+    "dataType": "boolean",
+    "value": true,
+    "comment": "answered the question",
+    "source": "api",
+    "evaluatorId": null,
+    "runId": null,
+    "createdAt": "2026-09-03T10:12:00.000Z"
+  },
+  "requestId": "0f1e2d3c4b5a6978"
+}
+```
+
+| Status | Meaning                                                                                         |
+| ------ | ----------------------------------------------------------------------------------------------- |
+| 201    | Stored                                                                                          |
+| 400    | `invalid_json`, or `invalid_request` when the body is not a score (the message names the field) |
+| 404    | `not_found`: no such trace in this key's project                                                |
+| 409    | `conflict`: the trace already holds 100 scores, the maximum; delete one first                   |
+| 429    | `quota_exhausted`: Firestore refused the write; nothing was stored                              |
+
+`source` is `api` for scores recorded through the API or MCP, `annotation` for ones entered on the trace page, and `eval` for ones written by an evaluator.
+
+#### `GET /api/v1/traces/{traceId}/scores` — scope `traces:read`
+
+Every score of one trace, newest first: `{ "traceId", "scores": [ ... ] }`. A trace that does not exist in this project is a `404 not_found`.
+
+#### `GET /api/v1/scores` — scope `traces:read`
+
+Newest-first list across the project with cursor pagination. Filters combine with AND.
+
+| Query   | Notes                                          |
+| ------- | ---------------------------------------------- |
+| `name`  | exact score name                               |
+| `from`  | inclusive ISO-8601 lower bound on `createdAt`  |
+| `to`    | inclusive ISO-8601 upper bound on `createdAt`  |
+| `limit` | 1–500, default 50                              |
+| `after` | `nextCursor` of a previous page (older scores) |
+
+Responds with `{ "scores": [ ... ], "nextCursor": "…" | null, "pageSize": 50 }`. An unparseable cursor is `400 invalid_request`.
+
+#### `DELETE /api/v1/traces/{traceId}/scores/{scoreId}` — scope `traces:delete`
+
+Delete one score. If it was the newest score of its name, the previous one takes its place in the trace's summary. Returns `{ "ok": true, "traceId", "scoreId" }` or `404 not_found`. Deleting a trace deletes its scores with it.
+
 ### `DELETE /api/v1/traces/{traceId}` — scope `traces:delete`
 
-Delete the trace, every span under it, and any patched metadata with them, then correct the project counters. Returns `{ "ok": true, "traceId" }` or `404 not_found`. This and the dashboard are the only two ways data leaves Firestore: FireTrace never sets TTLs or deletes on its own.
+Delete the trace, every span and score under it, and any patched metadata with them, then correct the project counters. Returns `{ "ok": true, "traceId" }` or `404 not_found`. This and the dashboard are the only two ways data leaves Firestore: FireTrace never sets TTLs or deletes on its own.
 
 ### `POST /api/mcp`
 
@@ -215,8 +302,10 @@ const api = new FireTraceApi({
 const key = await api.getKey(); // verify scopes at startup
 const page = await api.listTraces({ status: "error", limit: 20 });
 for await (const trace of api.iterateTraces({ model: "gpt-5" })) console.log(trace.id);
-const detail = await api.getTrace(page.traces[0].id); // null when missing
-await api.patchMetadata(detail!.trace.id, { feedback: 1 }); // needs traces:write
+const detail = await api.getTrace(page.traces[0].id); // null when missing; includes scores
+await api.addScore(detail!.trace.id, { name: "helpful", dataType: "boolean", value: true }); // needs traces:write
+const helpful = await api.listScores({ name: "helpful", limit: 100 }); // across the project
+await api.patchMetadata(detail!.trace.id, { ticket: "SUP-142" }); // needs traces:write
 await api.deleteTrace(page.traces[0].id); // needs traces:delete
 ```
 

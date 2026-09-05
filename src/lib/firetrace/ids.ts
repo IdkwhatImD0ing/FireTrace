@@ -10,6 +10,9 @@ export const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 export const SPAN_ID_RE = /^[0-9a-f]{16}$/;
 export const PROJECT_ID_RE = /^[0-9a-f]{24}$/;
 export const KEY_ID_RE = /^[0-9a-f]{16}$/;
+export const SCORE_ID_RE = /^[0-9a-f]{16}$/;
+export const EVALUATOR_ID_RE = /^[0-9a-f]{16}$/;
+export const RUN_ID_RE = /^[0-9a-f]{16}$/;
 
 export function normalizeHexId(value: string, length: number): string | null {
   if (typeof value !== "string" || value.length !== length) return null;
@@ -42,6 +45,26 @@ export function newProjectId(): string {
 }
 
 export function newKeyId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+export function isScoreId(value: string): boolean {
+  return SCORE_ID_RE.test(value);
+}
+
+export function newScoreId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+export function isEvaluatorId(value: string): boolean {
+  return EVALUATOR_ID_RE.test(value);
+}
+
+export function newEvaluatorId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+export function newRunId(): string {
   return randomBytes(8).toString("hex");
 }
 

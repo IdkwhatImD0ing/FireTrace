@@ -283,7 +283,7 @@ SPAN_ID=$(openssl rand -hex 8)     # 16 hex characters
 
 ## Updating metadata
 
-A trace is written once and never rewritten — with one exception. `metadata` is the place for facts that only exist after the run finished: a reader's thumbs rating, a reviewer's verdict, an overnight eval result, a business outcome that resolves hours later.
+A trace is written once and never rewritten — with two exceptions. **Scores** (`POST /api/v1/traces/{traceId}/scores`, see [api.md](./api.md#scores)) are the place for judgements that only exist after the run finished: a reader's thumbs rating, a reviewer's verdict, an overnight eval result. They are typed, indexed, and listable. **Metadata** is the place for free-form facts that arrive late: a business outcome that resolves hours later, a link to the ticket the run produced.
 
 ```http
 PATCH /api/v1/traces/{traceId}
@@ -315,7 +315,7 @@ Nothing else on the trace or its spans is touched.
 
 ### Convention
 
-Metadata now holds two kinds of thing with nothing structural to separate them: facts the caller knew at ingestion time, and judgements added afterwards. Prefixing the later ones (`feedback.*`, `review.*`, `eval.*`) keeps them legible to whoever reads the trace next, and makes a future migration to a dedicated resource a mechanical one. FireTrace does not enforce this.
+Metadata holds two kinds of thing with nothing structural to separate them: facts the caller knew at ingestion time, and facts added afterwards. Prefixing the later ones (`outcome.*`, `review.*`) keeps them legible to whoever reads the trace next. FireTrace does not enforce this. Ratings, verdicts, and eval results belong in scores, which the trace page, the trace list, and `GET /api/v1/scores` all understand; integrations that recorded them as `feedback.*` metadata before scores existed keep working, but nothing will aggregate them.
 
 ### Responses
 

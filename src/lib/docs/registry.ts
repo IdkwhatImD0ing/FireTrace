@@ -58,6 +58,14 @@ export const DOCS: DocEntry[] = [
     group: "Reference",
   },
   {
+    slug: "evaluators",
+    file: "evaluators.md",
+    title: "Scores and evaluators",
+    summary:
+      "Attach judgements to traces, then let an LLM judge score them: endpoint setup, templates, runs.",
+    group: "Reference",
+  },
+  {
     slug: "security",
     file: "security.md",
     title: "Security model",

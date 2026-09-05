@@ -1,9 +1,13 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type {
+  ListScoresQuery,
   ListTracesQuery,
   MetadataPatchResult,
   ProjectLike,
   RecordResult,
+  ScoreInputLike,
+  ScoreLike,
+  ScorePageLike,
   TraceBackend,
   TraceDetailLike,
   TracePageLike,
@@ -23,7 +27,17 @@ import {
   listTraces,
   MAX_PAGE_SIZE,
   parseTraceFilters,
+  parseTraceSort,
 } from "@/lib/firetrace/queries";
+import {
+  addScore,
+  DEFAULT_SCORE_PAGE_SIZE,
+  listScores,
+  listScoresForTrace,
+  MAX_SCORE_PAGE_SIZE,
+  normalizeScoreInput,
+  parseScoreFilters,
+} from "@/lib/firetrace/scores";
 import { storageLevel } from "@/lib/firetrace/storage";
 
 /**
@@ -67,20 +81,61 @@ export class FirestoreBackend implements TraceBackend {
     const filters = parseTraceFilters({
       status: query.status,
       model: query.model,
+      name: query.name,
+      tag: query.tag,
       sessionId: query.sessionId,
       userId: query.userId,
       from: query.from,
       to: query.to,
     });
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
-    return listTraces(this.db, this.projectId, filters, { after: query.cursor, limit });
+    return listTraces(this.db, this.projectId, filters, {
+      after: query.cursor,
+      limit,
+      sort: parseTraceSort(query.sort),
+    });
   }
 
   async getTrace(traceId: string): Promise<TraceDetailLike | null> {
     const trace = await getTrace(this.db, this.projectId, traceId);
     if (!trace) return null;
-    const spans = await listSpans(this.db, this.projectId, traceId);
-    return { trace, spans };
+    const [spans, scores] = await Promise.all([
+      listSpans(this.db, this.projectId, traceId),
+      listScoresForTrace(this.db, this.projectId, traceId),
+    ]);
+    return { trace, spans, scores };
+  }
+
+  async addScore(traceId: string, input: ScoreInputLike): Promise<ScoreLike> {
+    const normalized = normalizeScoreInput(input);
+    if (!normalized.ok) {
+      throw new ApiError(400, normalized.error.code, normalized.error.message);
+    }
+    return addScore(this.db, this.projectId, traceId, normalized.value, { source: "api" });
+  }
+
+  async listScores(query: ListScoresQuery): Promise<ScorePageLike> {
+    if (query.traceId) {
+      const scores = await listScoresForTrace(this.db, this.projectId, query.traceId);
+      return {
+        scores: query.name ? scores.filter((s) => s.name === query.name) : scores,
+        nextCursor: null,
+      };
+    }
+    const limit = Math.min(
+      Math.max(query.limit ?? DEFAULT_SCORE_PAGE_SIZE, 1),
+      MAX_SCORE_PAGE_SIZE,
+    );
+    const page = await listScores(
+      this.db,
+      this.projectId,
+      parseScoreFilters({ name: query.name }),
+      {
+        after: query.cursor,
+        limit,
+      },
+    );
+    return { scores: page.scores, nextCursor: page.nextCursor };
   }
 
   async recordTrace(body: unknown): Promise<RecordResult> {

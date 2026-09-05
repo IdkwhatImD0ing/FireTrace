@@ -30,14 +30,23 @@ describe("openApiDocument", () => {
     expect(Object.keys(doc.paths).sort()).toEqual([
       "/api/mcp",
       "/api/v1/project",
+      "/api/v1/scores",
       "/api/v1/traces",
       "/api/v1/traces/{traceId}",
+      "/api/v1/traces/{traceId}/scores",
+      "/api/v1/traces/{traceId}/scores/{scoreId}",
     ]);
     expect(doc.paths["/api/v1/traces"].post.operationId).toBe("recordTrace");
     expect(doc.paths["/api/v1/traces"].get.operationId).toBe("listTraces");
     expect(doc.paths["/api/v1/traces/{traceId}"].get.operationId).toBe("getTrace");
     expect(doc.paths["/api/v1/traces/{traceId}"].patch.operationId).toBe("patchTraceMetadata");
     expect(doc.paths["/api/v1/traces/{traceId}"].delete.operationId).toBe("deleteTrace");
+    expect(doc.paths["/api/v1/traces/{traceId}/scores"].post.operationId).toBe("addScore");
+    expect(doc.paths["/api/v1/traces/{traceId}/scores"].get.operationId).toBe("listTraceScores");
+    expect(doc.paths["/api/v1/traces/{traceId}/scores/{scoreId}"].delete.operationId).toBe(
+      "deleteScore",
+    );
+    expect(doc.paths["/api/v1/scores"].get.operationId).toBe("listScores");
     expect(doc.paths["/api/v1/project"].get.operationId).toBe("getProject");
     expect(doc.components.securitySchemes.apiKey).toMatchObject({ type: "http", scheme: "bearer" });
   });

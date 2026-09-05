@@ -76,3 +76,13 @@ export function totalTokens(
 export function truncateId(id: string, keep = 8): string {
   return id.length <= keep * 2 ? id : `${id.slice(0, keep)}…${id.slice(-4)}`;
 }
+
+/** Score values as shown in tables and chips: numbers to 3 decimals, labels as-is. */
+export function formatScoreValue(value: number | string | boolean): string {
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? String(value)
+      : value.toLocaleString("en-US", { maximumFractionDigits: 3 });
+  }
+  return String(value);
+}

@@ -134,3 +134,39 @@ test("status and model filters combine", async () => {
   await expect(page.getByRole("link", { name: "run-58", exact: true })).toBeVisible();
   await expect(filterControl(page, "Model")).toHaveValue("model-a");
 });
+
+test("a trace name filter and the Slowest preset both live in the URL", async () => {
+  await page.goto(`/projects/${projectId}`);
+  await filterControl(page, "Trace name").fill("run-7");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page).toHaveURL(/name=run-7/);
+  await expect(runLinks()).toHaveCount(1);
+  await expect(runLinks().first()).toHaveText("run-7");
+
+  await page.getByRole("link", { name: "Slowest" }).click();
+  await expect(page).toHaveURL(/sort=slowest/);
+  await expect(page).toHaveURL(/name=run-7/);
+  await expect(page.getByText("slowest first")).toBeVisible();
+  await expect(runLinks()).toHaveCount(1);
+
+  await page.getByRole("link", { name: "Newest" }).click();
+  await expect(page).not.toHaveURL(/sort=/);
+  await expect(page.getByText("newest first")).toBeVisible();
+});
+
+test("the current page can be exported as CSV with the same filters", async () => {
+  const res = await page.request.get(`/api/projects/${projectId}/traces/export?status=error`);
+  expect(res.status()).toBe(200);
+  expect(res.headers()["content-type"]).toContain("text/csv");
+  const lines = (await res.text()).trim().split("\r\n");
+  expect(lines[0]).toMatch(/^id,name,status,startedAt/);
+  expect(lines).toHaveLength(1 + PAGE_SIZE);
+  expect(lines[1]).toContain("run-59");
+  expect(lines.some((l) => l.includes("run-45,"))).toBe(false);
+
+  await page.goto(`/projects/${projectId}?status=error`);
+  await expect(page.getByRole("link", { name: "Export CSV" })).toHaveAttribute(
+    "href",
+    /\/traces\/export\?status=error/,
+  );
+});

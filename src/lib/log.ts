@@ -18,6 +18,10 @@ const DENIED_KEYS = new Set([
   "idtoken",
   "sessioncookie",
   "password",
+  "comment",
+  "prompt",
+  "prompttemplate",
+  "reasoning",
 ]);
 
 type Level = "info" | "warn" | "error";

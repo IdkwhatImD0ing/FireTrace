@@ -85,12 +85,17 @@ async function main() {
       revokedAt: null,
     });
 
-  // 4. Sample traces with distinct ids.
+  // 4. Sample traces with distinct ids, spread over the last five days so the
+  //    dashboard has something to chart.
   let stored = 0;
   for (let i = 0; i < 5; i++) {
     const id = (i + 1).toString(16).padStart(2, "0").repeat(16);
     const normalized = normalizeIngestBody(
-      sampleTraceRequest({ id, name: i % 2 ? "summarize-thread" : "answer-question" }),
+      sampleTraceRequest({
+        id,
+        name: i % 2 ? "summarize-thread" : "answer-question",
+        startedAt: new Date(Date.now() - i * 86_400_000).toISOString(),
+      }),
     );
     if (!normalized.ok) throw new Error(normalized.error.message);
     const outcome = await ingestTrace(db, projectRef.id, normalized.value);

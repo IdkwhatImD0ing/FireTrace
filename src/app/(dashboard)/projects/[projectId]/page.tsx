@@ -3,25 +3,47 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/EmptyState";
 import { TrialNotice } from "@/components/dashboard/TrialNotice";
+import { RunEvaluatorBulk } from "@/components/traces/RunEvaluatorBulk";
+import { SessionSummary } from "@/components/traces/SessionSummary";
 import { SetupPanel } from "@/components/traces/SetupPanel";
 import { StorageNotice } from "@/components/traces/StorageNotice";
 import { TraceFilters } from "@/components/traces/TraceFilters";
+import { TraceHistogram } from "@/components/traces/TraceHistogram";
 import { TraceTable } from "@/components/traces/TraceTable";
 import { serverEnv } from "@/lib/env/server";
+import { listEvaluators } from "@/lib/eval/evaluators";
+import { EVAL_LIMITS } from "@/lib/eval/schema";
 import { adminDb } from "@/lib/firebase/admin";
+import { ApiError } from "@/lib/firetrace/errors";
 import { isProjectId } from "@/lib/firetrace/ids";
 import { listApiKeys } from "@/lib/firetrace/projects";
 import { effectivePlan, getTrialUsage, trialSubject } from "@/lib/firetrace/trial";
-import { listTraces, parseTraceFilters, recentModels } from "@/lib/firetrace/queries";
+import {
+  DEFAULT_PAGE_SIZE,
+  listTraces,
+  parseTraceFilters,
+  parseTraceSort,
+  recentFacets,
+  traceListQuery,
+} from "@/lib/firetrace/queries";
 import { formatBytes } from "@/lib/firetrace/storage";
+import type { TracePage, TraceSort } from "@/lib/firetrace/types";
 import { getAccessibleProject } from "@/lib/auth/access";
 import { requireOwnerOrRedirect } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Traces" };
+/** Bulk evaluator runs are server actions on this route; up to 50 judge calls. */
+export const maxDuration = 300;
 
 function first(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
+
+const SORT_LABEL: Record<TraceSort, string> = {
+  newest: "newest first",
+  slowest: "slowest first",
+  costliest: "costliest first",
+};
 
 function withParams(base: string, params: Record<string, string | undefined>): string {
   const search = new URLSearchParams();
@@ -48,24 +70,44 @@ export default async function ProjectTracesPage({
       : null;
 
   const filters = parseTraceFilters(sp);
+  const sort = parseTraceSort(sp.sort);
   const after = first(sp.after);
   const before = first(sp.before);
-  const [page, keys, models] = await Promise.all([
-    listTraces(db, projectId, filters, { after, before }),
+  const isOwner = owner.role === "owner";
+  const [keys, facets, evaluators] = await Promise.all([
     listApiKeys(db, projectId),
-    recentModels(db, projectId),
+    recentFacets(db, projectId),
+    isOwner ? listEvaluators(db, projectId) : Promise.resolve([]),
   ]);
+  let page: TracePage = {
+    traces: [],
+    nextCursor: null,
+    prevCursor: null,
+    pageSize: DEFAULT_PAGE_SIZE,
+  };
+  let listError: string | null = null;
+  try {
+    page = await listTraces(db, projectId, filters, { after, before, sort });
+  } catch (err) {
+    // A sort that does not combine with the chosen filters: say so instead of a 500.
+    if (!(err instanceof ApiError) || err.status !== 400) throw err;
+    listError = err.message;
+  }
 
   const filterParams = {
     status: filters.status,
     model: filters.model,
+    name: filters.name,
+    tag: filters.tag,
     sessionId: filters.sessionId,
     userId: filters.userId,
     from: filters.from,
     to: filters.to,
+    sort: sort === "newest" ? undefined : sort,
   };
   const base = `/projects/${projectId}`;
   const filtering = Object.values(filterParams).some(Boolean);
+  const listQuery = traceListQuery(filters, sort);
 
   return (
     <div className="space-y-6">
@@ -86,9 +128,6 @@ export default async function ProjectTracesPage({
             {formatBytes(project.estimatedBytes)}
           </p>
         </div>
-        <Link href={`${base}/settings`} className="btn btn-ghost">
-          Settings
-        </Link>
       </div>
 
       <StorageNotice estimatedBytes={project.estimatedBytes} limitBytes={env.storageLimitBytes} />
@@ -113,17 +152,42 @@ export default async function ProjectTracesPage({
         </>
       ) : (
         <>
-          <TraceFilters projectId={projectId} filters={filters} models={models} />
+          <TraceFilters projectId={projectId} filters={filters} facets={facets} sort={sort} />
+          <TraceHistogram projectId={projectId} />
+          {(filters.sessionId || filters.userId) && page.traces.length > 0 && (
+            <SessionSummary filters={filters} traces={page.traces} />
+          )}
+          {isOwner && evaluators.length > 0 && page.traces.length > 0 && (
+            <RunEvaluatorBulk
+              projectId={projectId}
+              evaluators={evaluators.map((e) => ({ id: e.id, name: e.name }))}
+              filters={filterParams}
+              traceCount={page.traces.length}
+              maxTraces={EVAL_LIMITS.maxBulkTraces}
+              configured={env.eval !== null}
+            />
+          )}
           {page.traces.length === 0 ? (
             <p className="card px-5 py-8 text-center text-sm text-ink-2">
-              No traces match these filters.
+              {listError ?? "No traces match these filters."}
             </p>
           ) : (
-            <TraceTable projectId={projectId} traces={page.traces} />
+            <TraceTable projectId={projectId} traces={page.traces} listQuery={listQuery} />
           )}
           <nav aria-label="Pagination" className="flex items-center justify-between">
             <span className="font-mono text-[11px] text-ink-3">
-              {page.traces.length} of up to {page.pageSize} per page · newest first
+              {page.traces.length} of up to {page.pageSize} per page · {SORT_LABEL[sort]} ·{" "}
+              <a
+                href={withParams(`/api/projects/${projectId}/traces/export`, {
+                  ...filterParams,
+                  after,
+                  before,
+                })}
+                className="text-ink hover:underline"
+                download={`firetrace-${projectId}-traces.csv`}
+              >
+                Export CSV
+              </a>
             </span>
             <div className="flex gap-2">
               {page.prevCursor ? (

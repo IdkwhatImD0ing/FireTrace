@@ -13,11 +13,11 @@ Nothing in either path requires Firebase credentials on the client side. The rem
 
 Send the key as `Authorization: Bearer ft_live_...`. The tools offered follow the key's scopes, so an agent never sees a tool it cannot use:
 
-| Scope           | Tools                                                       |
-| --------------- | ----------------------------------------------------------- |
-| `traces:read`   | `get_project`, `list_traces`, `get_trace`, `find_spans`     |
-| `traces:write`  | `record_trace`, `patch_trace_metadata`, `get_ingest_schema` |
-| `traces:delete` | `delete_trace`                                              |
+| Scope           | Tools                                                                    |
+| --------------- | ------------------------------------------------------------------------ |
+| `traces:read`   | `get_project`, `list_traces`, `get_trace`, `find_spans`, `list_scores`   |
+| `traces:write`  | `record_trace`, `add_score`, `patch_trace_metadata`, `get_ingest_schema` |
+| `traces:delete` | `delete_trace`                                                           |
 
 Recommended: give an investigating agent a **read-only** key with an expiry. Add `traces:delete` only for a key used by a cleanup workflow you supervise. A missing or invalid key is answered with HTTP 401 and a `WWW-Authenticate` challenge before any MCP message is processed.
 
@@ -83,20 +83,22 @@ const failures = await client.callTool({
 
 ## Tools
 
-| Tool                   | Input                                                                                  | Returns                                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `get_project`          | none                                                                                   | Name, trace/span counts, storage estimate and level, last trace time, key scopes.              |
-| `list_traces`          | `status`, `model`, `sessionId`, `userId`, `from`, `to`, `limit` (default 20), `cursor` | One line per trace (id, time, status, duration, name, model, span/error counts) plus a cursor. |
-| `get_trace`            | `traceId`, `maxChars` (default 2000), `maxSpans` (default 100), `includeContent`       | A span outline, then the trace and spans as JSON with long strings truncated.                  |
-| `find_spans`           | `traceId`, `kind`, `status`, `nameContains`, `limit`                                   | Matching spans without content: id, parent, kind, status, duration, name, model.               |
-| `get_ingest_schema`    | none                                                                                   | JSON Schema of the `record_trace` body, derived from the server's validator.                   |
-| `record_trace`         | `trace` (the trace object; the server adds `schemaVersion: 1`)                         | Stored / already stored, trace id, span count. Validation errors come back as tool errors.     |
-| `patch_trace_metadata` | `traceId`, `metadata` (keys to merge)                                                  | The merged metadata and whether anything changed. The only way to alter a stored trace.        |
-| `delete_trace`         | `traceId`, `confirm: true`                                                             | Confirmation. Irreversible; the `confirm` literal guards against accidental calls.             |
+| Tool                   | Input                                                                                                         | Returns                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_project`          | none                                                                                                          | Name, trace/span counts, storage estimate and level, last trace time, key scopes.                                                            |
+| `list_traces`          | `status`, `model`, `name`, `tag`, `sessionId`, `userId`, `from`, `to`, `sort`, `limit` (default 20), `cursor` | One line per trace (id, time, status, duration, name, model, span/error counts) plus a cursor. `sort` is `newest`, `slowest` or `costliest`. |
+| `get_trace`            | `traceId`, `maxChars` (default 2000), `maxSpans` (default 100), `includeContent`                              | A span outline, then the trace and spans as JSON with long strings truncated.                                                                |
+| `find_spans`           | `traceId`, `kind`, `status`, `nameContains`, `limit`                                                          | Matching spans without content: id, parent, kind, status, duration, name, model.                                                             |
+| `get_ingest_schema`    | none                                                                                                          | JSON Schema of the `record_trace` body, derived from the server's validator.                                                                 |
+| `record_trace`         | `trace` (the trace object; the server adds `schemaVersion: 1`)                                                | Stored / already stored, trace id, span count. Validation errors come back as tool errors.                                                   |
+| `add_score`            | `traceId`, `name`, `dataType`, `value`, `comment`, `spanId`                                                   | The stored score. A queryable judgement (rating, verdict, eval result) attached to the trace.                                                |
+| `list_scores`          | `traceId`, `name`, `limit` (default 50), `cursor`                                                             | One line per score (id, time, trace, name=value, source, comment) plus a cursor.                                                             |
+| `patch_trace_metadata` | `traceId`, `metadata` (keys to merge)                                                                         | The merged metadata and whether anything changed. For free-form facts, not judgements.                                                       |
+| `delete_trace`         | `traceId`, `confirm: true`                                                                                    | Confirmation. Irreversible; the `confirm` literal guards against accidental calls.                                                           |
 
-Text results are written for a model to read: outlines, compact lines, and truncation markers such as `…[+3120 chars truncated]`. `list_traces`, `find_spans`, `get_project`, `record_trace`, `patch_trace_metadata`, and `delete_trace` also return `structuredContent` for programmatic use.
+Text results are written for a model to read: outlines, compact lines, and truncation markers such as `…[+3120 chars truncated]`. `list_traces`, `find_spans`, `get_project`, `record_trace`, `add_score`, `list_scores`, `patch_trace_metadata`, and `delete_trace` also return `structuredContent` for programmatic use.
 
-`patch_trace_metadata` merges shallowly: a key in the patch replaces that top-level key outright, keys it does not mention are left alone, and concurrent writers on one key are last-writer-wins. Everything else about a trace, spans included, stays immutable, and `bodyHash` keeps describing the body as ingested. Metadata is not indexed, so an agent cannot search or filter by what it writes there — see [ingestion-api.md](./ingestion-api.md#updating-metadata).
+`add_score` is how an agent records a judgement it can later find again: scores are indexed, listable per trace or by name across the project, and shown on the trace page and in the trace list. `patch_trace_metadata` merges shallowly: a key in the patch replaces that top-level key outright, keys it does not mention are left alone, and concurrent writers on one key are last-writer-wins. Everything else about a trace, spans included, stays immutable, and `bodyHash` keeps describing the body as ingested. Metadata is not indexed, so an agent cannot search or filter by what it writes there — see [ingestion-api.md](./ingestion-api.md#updating-metadata).
 
 Suggested workflow for an investigating agent:
 
@@ -104,11 +106,11 @@ Suggested workflow for an investigating agent:
 2. `find_spans` with `status: "error"` on a candidate to locate the failing span.
 3. `get_trace` with a modest `maxChars` to read the surrounding inputs and outputs.
 4. `record_trace` to store the agent's own run, if the key can write.
-5. `patch_trace_metadata` to record a verdict on a trace it investigated, if the key can write.
+5. `add_score` to record a verdict on a trace it investigated, if the key can write; `list_scores` to review earlier verdicts.
 
 ## Running the server elsewhere
 
-`@firetrace/mcp` exports `createFireTraceMcpServer(backend)` and a `TraceBackend` interface, so the same tools can sit on any storage. The dashboard wires it to Firestore in `src/lib/mcp/firestore-backend.ts`; the CLI wires it to the REST API with `HttpBackend`. A custom backend needs six methods (`getProject`, `listTraces`, `getTrace`, `recordTrace`, `deleteTrace`, `ingestSchema`) plus the key's `scopes` and `projectId`.
+`@firetrace/mcp` exports `createFireTraceMcpServer(backend)` and a `TraceBackend` interface, so the same tools can sit on any storage. The dashboard wires it to Firestore in `src/lib/mcp/firestore-backend.ts`; the CLI wires it to the REST API with `HttpBackend`. A custom backend needs nine methods (`getProject`, `listTraces`, `getTrace`, `recordTrace`, `patchTraceMetadata`, `addScore`, `listScores`, `deleteTrace`, `ingestSchema`) plus the key's `scopes` and `projectId`.
 
 ## Security summary
 

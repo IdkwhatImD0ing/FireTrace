@@ -21,6 +21,10 @@ const TRACE_ID = z
 
 const STATUS = z.enum(["ok", "error", "unset"]);
 
+const SCORE_NAME = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/, "letters, digits, '_' and '-' only, at most 64 characters");
+
 function ms(n: number): string {
   if (n < 1000) return `${n}ms`;
   if (n < 60_000) return `${(n / 1000).toFixed(2)}s`;
@@ -106,8 +110,8 @@ export function createFireTraceMcpServer(
       instructions: [
         "FireTrace stores completed LLM/agent traces (a trace is a tree of spans).",
         `This key belongs to project ${backend.projectId} with scopes: ${backend.scopes.join(", ") || "none"}.`,
-        "Use list_traces to find traces, get_trace for the full span tree, find_spans to locate specific spans, and record_trace to store a new trace (call get_ingest_schema first if unsure of the shape). patch_trace_metadata merges judgements made after the run into a trace's metadata.",
-        "A stored trace is immutable apart from its metadata; deletion is explicit and permanent.",
+        "Use list_traces to find traces, get_trace for the full span tree, find_spans to locate specific spans, and record_trace to store a new trace (call get_ingest_schema first if unsure of the shape). add_score attaches a judgement made after the run (a rating, a verdict, an eval result) as a queryable score; list_scores reads scores back. patch_trace_metadata merges free-form keys into a trace's metadata.",
+        "A stored trace is immutable apart from its metadata and scores; deletion is explicit and permanent.",
       ].join(" "),
     },
   );
@@ -150,12 +154,20 @@ export function createFireTraceMcpServer(
       {
         title: "List traces",
         description:
-          "List traces newest first with optional filters (all combine with AND). Returns one line per trace plus a cursor for the next page. Times are ISO-8601 UTC.",
+          "List traces newest first (or slowest/costliest first) with optional filters (all combine with AND). Returns one line per trace plus a cursor for the next page. Times are ISO-8601 UTC.",
         inputSchema: {
           status: STATUS.optional().describe("Only traces with this status"),
           model: z.string().max(200).optional().describe("Exact model name, e.g. gpt-5"),
+          name: z.string().max(500).optional().describe("Exact trace name"),
+          tag: z.string().max(64).optional().describe("One tag the trace must carry"),
           sessionId: z.string().max(200).optional(),
           userId: z.string().max(200).optional(),
+          sort: z
+            .enum(["newest", "slowest", "costliest"])
+            .optional()
+            .describe(
+              "Ordering; slowest and costliest combine only with status, model, name and tag",
+            ),
           from: z
             .string()
             .datetime({ offset: true })
@@ -265,7 +277,14 @@ export function createFireTraceMcpServer(
                 },
           );
           const omitted = detail.spans.length - spans.length;
-          const body = truncateDeep({ trace: detail.trace, spans }, input.maxChars ?? 2000);
+          const body = truncateDeep(
+            {
+              trace: detail.trace,
+              spans,
+              ...(detail.scores?.length ? { scores: detail.scores } : {}),
+            },
+            input.maxChars ?? 2000,
+          );
           const outline = spanOutline(detail);
           const parts = [
             `Trace ${detail.trace.id} "${detail.trace.name}" — ${detail.trace.status}, ${ms(detail.trace.durationMs)}, ${detail.spans.length} spans, ${detail.trace.errorCount} errors, started ${detail.trace.startedAt}.`,
@@ -345,6 +364,46 @@ export function createFireTraceMcpServer(
         }
       },
     );
+
+    server.registerTool(
+      "list_scores",
+      {
+        title: "List scores",
+        description:
+          "Scores are judgements attached to traces after the run (ratings, review verdicts, evaluator results): a name, a numeric/categorical/boolean value and an optional comment. Pass traceId for one trace's full history, or name to see one score across the project, newest first.",
+        inputSchema: {
+          traceId: TRACE_ID.optional().describe("Only this trace's scores"),
+          name: SCORE_NAME.optional().describe("Only scores with this name"),
+          limit: z.number().int().min(1).max(500).optional().describe("Page size, default 50"),
+          cursor: z.string().max(500).optional().describe("nextCursor from a previous call"),
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true },
+      },
+      async (input) => {
+        try {
+          const page = await backend.listScores({ ...input, limit: input.limit ?? 50 });
+          const header =
+            page.scores.length === 0
+              ? "No scores match."
+              : `${page.scores.length} score(s), newest first. Columns: id, createdAt, traceId, name=value, source, comment.`;
+          const lines = page.scores.map((s) => {
+            const comment = s.comment
+              ? `  ${s.comment.length > 120 ? `${s.comment.slice(0, 120)}…` : s.comment}`
+              : "";
+            return `${s.id}  ${s.createdAt}  ${s.traceId}  ${s.name}=${JSON.stringify(s.value)}  ${s.source}${comment}`;
+          });
+          const footer = page.nextCursor
+            ? `More available: call again with cursor="${page.nextCursor}".`
+            : "End of results.";
+          return text([header, ...lines, footer].join("\n"), {
+            scores: page.scores,
+            nextCursor: page.nextCursor,
+          });
+        } catch (err) {
+          return failure(err);
+        }
+      },
+    );
   }
 
   if (canWrite) {
@@ -392,11 +451,47 @@ export function createFireTraceMcpServer(
     );
 
     server.registerTool(
+      "add_score",
+      {
+        title: "Add score",
+        description:
+          "Attach a score to a stored trace: a judgement made after the run, such as a rating, a review verdict or an evaluator's result. Scores are indexed and listable (unlike metadata). Each has a name (letters, digits, '_' and '-'), a dataType with a matching value (numeric → number, categorical → string, boolean → boolean) and an optional comment explaining it. Scores are append-only: adding the same name again records a newer score, and the trace's summary shows the newest per name.",
+        inputSchema: {
+          traceId: TRACE_ID,
+          name: SCORE_NAME.describe("Score name, e.g. accuracy, helpful, topic"),
+          dataType: z.enum(["numeric", "categorical", "boolean"]),
+          value: z
+            .union([z.number(), z.string().max(200), z.boolean()])
+            .describe("Must match dataType"),
+          comment: z.string().max(2000).optional().describe("Why this score was given"),
+          spanId: z
+            .string()
+            .regex(/^[0-9a-fA-F]{16}$/)
+            .optional()
+            .describe("Scope the score to one span instead of the whole trace"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      },
+      async (input) => {
+        try {
+          const { traceId, ...score } = input;
+          const stored = await backend.addScore(traceId, score);
+          return text(
+            `Added score ${stored.name}=${JSON.stringify(stored.value)} (${stored.id}) to trace ${traceId}.`,
+            { ...stored },
+          );
+        } catch (err) {
+          return failure(err);
+        }
+      },
+    );
+
+    server.registerTool(
       "patch_trace_metadata",
       {
         title: "Patch trace metadata",
         description:
-          "Shallow-merge keys into a stored trace's metadata: the one part of a trace that can change after it is recorded, for judgements that only exist afterwards (a rating, a review verdict, an eval result). A key in the patch replaces that top-level key outright; keys not mentioned are left alone; concurrent writers on one key are last-writer-wins. Everything else about the trace, spans included, stays immutable. Metadata is not indexed, so it cannot be searched or filtered by.",
+          "Shallow-merge keys into a stored trace's metadata for free-form facts that only exist after the run (a business outcome, a link to a ticket). For ratings, verdicts and eval results prefer add_score, which is indexed. A key in the patch replaces that top-level key outright; keys not mentioned are left alone; concurrent writers on one key are last-writer-wins. Everything else about the trace, spans included, stays immutable. Metadata is not indexed, so it cannot be searched or filtered by.",
         inputSchema: {
           traceId: TRACE_ID,
           metadata: z

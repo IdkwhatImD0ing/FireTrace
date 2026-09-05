@@ -9,8 +9,14 @@ export type KeyScope = "traces:write" | "traces:read" | "traces:delete";
 export interface ListTracesQuery {
   status?: string;
   model?: string;
+  /** Exact trace name. */
+  name?: string;
+  /** One tag the trace must carry. */
+  tag?: string;
   sessionId?: string;
   userId?: string;
+  /** newest (default), slowest or costliest; the latter two only with status/model/name/tag. */
+  sort?: "newest" | "slowest" | "costliest";
   /** Inclusive ISO-8601 lower bound on startedAt. */
   from?: string;
   /** Inclusive ISO-8601 upper bound on startedAt. */
@@ -42,6 +48,8 @@ export interface TraceSummaryLike {
   costUsd?: number | null;
   spanCount: number;
   errorCount: number;
+  /** Newest score per name. */
+  scores?: Record<string, { value: number | string | boolean; dataType: string }>;
 }
 
 export interface TracePageLike {
@@ -73,6 +81,47 @@ export interface SpanLike {
 export interface TraceDetailLike {
   trace: TraceSummaryLike & { input?: unknown; output?: unknown; metadata?: unknown };
   spans: SpanLike[];
+  /** Every score of the trace, newest first. */
+  scores?: ScoreLike[];
+}
+
+/** A judgement attached to a trace after the run: a rating, a verdict, an eval result. */
+export interface ScoreInputLike {
+  /** Letters, digits, '_' and '-', at most 64 characters. */
+  name: string;
+  dataType: "numeric" | "categorical" | "boolean";
+  /** A number for numeric, a string for categorical, a boolean for boolean. */
+  value: number | string | boolean;
+  comment?: string;
+  spanId?: string;
+}
+
+export interface ScoreLike {
+  id: string;
+  traceId: string;
+  spanId?: string | null;
+  name: string;
+  dataType: string;
+  value: number | string | boolean;
+  comment?: string | null;
+  source: string;
+  evaluatorId?: string | null;
+  createdAt: string;
+}
+
+export interface ListScoresQuery {
+  /** Only this trace's scores (its full history, newest first). */
+  traceId?: string;
+  /** Only scores with this name. */
+  name?: string;
+  limit?: number;
+  /** nextCursor from a previous page. */
+  cursor?: string;
+}
+
+export interface ScorePageLike {
+  scores: ScoreLike[];
+  nextCursor: string | null;
 }
 
 export interface ProjectLike {
@@ -123,6 +172,10 @@ export interface TraceBackend {
   ): Promise<MetadataPatchResult>;
   /** Throws a BackendError with status 404 when the trace does not exist. */
   deleteTrace(traceId: string): Promise<void>;
+  /** Attach a score to a stored trace. Throws a BackendError with status 404 when it does not exist. */
+  addScore(traceId: string, input: ScoreInputLike): Promise<ScoreLike>;
+  /** Scores of one trace, or across the project, newest first. */
+  listScores(query: ListScoresQuery): Promise<ScorePageLike>;
   /** JSON Schema for the ingestion request body. */
   ingestSchema(): Promise<unknown>;
 }

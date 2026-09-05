@@ -28,6 +28,7 @@ function previewData(): { trace: TraceDetail; spans: SpanDetail[] } {
       estimatedBytes,
       ingestedAt: trace.endedAt,
       metadataUpdatedAt: null,
+      scores: {},
     },
     spans: spans.map((s) => ({
       ...s,
