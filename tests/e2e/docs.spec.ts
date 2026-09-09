@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { DOCS } from "../../src/lib/docs/registry";
 
 /** The public documentation pages need no session and render the committed Markdown. */
 test.describe("documentation pages", () => {
@@ -11,27 +12,37 @@ test.describe("documentation pages", () => {
     await expect(nav.getByRole("link", { name: "MCP", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Deploy with an AI agent" })).toBeVisible();
     await expect(page.getByRole("link", { name: "/api/v1/openapi.json" })).toBeVisible();
+    // Every registered doc must be reachable from the introduction, not only from the sidebar.
+    const main = page.locator("main");
+    for (const { slug } of DOCS) {
+      await expect(main.locator(`a[href^="/docs/${slug}"]`).first()).toBeVisible();
+    }
+    // The hand-written "On this page" list must match the headings it points at.
+    const toc = page.getByRole("complementary", { name: "On this page" });
+    for (const href of await toc
+      .getByRole("link")
+      .evaluateAll((links) => links.map((l) => l.getAttribute("href") ?? ""))) {
+      await expect(page.locator(href)).toHaveCount(1);
+    }
   });
 
   test("the introduction shows tabbed code samples and a collapsed response", async ({ page }) => {
     await page.goto("/docs");
+    // Scoped by the group's own accessible name, so edits to the prose cannot break this.
     const mcp = page.getByRole("tablist", { name: "MCP client setup" });
+    const panel = () => page.locator(".doc-code").filter({ has: mcp }).locator("pre:not([hidden])");
     await expect(mcp.getByRole("tab", { name: "Claude Code" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    await expect(page.locator("#connect-an-agent + p + .doc-code pre:not([hidden])")).toContainText(
-      "claude mcp add --transport http firetrace",
-    );
+    await expect(panel()).toContainText("claude mcp add --transport http firetrace");
     await mcp.getByRole("tab", { name: "stdio" }).click();
-    await expect(page.locator("#connect-an-agent + p + .doc-code pre:not([hidden])")).toContainText(
-      "@firetrace/mcp",
-    );
+    await expect(panel()).toContainText("@firetrace/mcp");
     // Response bodies start collapsed.
-    const response = page.locator("details").filter({ hasText: "Response · 201 created" }).first();
+    const response = page.locator("details").filter({ hasText: "Response · trace stored" });
     await expect(response.locator("pre")).toBeHidden();
-    await response.getByText("Response · 201 created").click();
-    await expect(response.locator("pre").first()).toContainText('"duplicate": false');
+    await response.getByText("Response · trace stored").click();
+    await expect(response.locator("pre")).toContainText('"duplicate": false');
   });
 
   test("a reference page renders headings with anchors, tables, code with copy buttons, and rewritten links", async ({

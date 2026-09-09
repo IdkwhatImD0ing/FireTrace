@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { CardGrid, DocCard } from "@/components/docs/Cards";
 import { CodeGroup } from "@/components/docs/CodeGroup";
@@ -6,7 +7,7 @@ import { Disclosure } from "@/components/docs/Disclosure";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { getOwner } from "@/lib/auth/session";
 import { loadDoc } from "@/lib/docs/load";
-import { publicAppUrl, publicRepositoryUrl, trialTraceLimitFromEnv } from "@/lib/env/server";
+import { publicRepositoryUrl, trialTraceLimitFromEnv } from "@/lib/env/server";
 import {
   INGEST_RESPONSE,
   LIST_RESPONSE,
@@ -24,12 +25,31 @@ export const metadata: Metadata = {
     "Record every LLM and agent run as one trace, keep it as long as you like in a Firebase project you own, and read it back from your agents over MCP.",
 };
 
-/** The deployment prompt lives in docs/deploy-prompt.md; this page offers the same text. */
+/**
+ * The deployment prompt lives in docs/deploy-prompt.md; this page offers the
+ * same text. The file is a build-time constant, so it is read and parsed once
+ * per process rather than on every request to this dynamically rendered page.
+ */
+let prompt: string | null | undefined;
 function deployPrompt(): string | null {
+  if (prompt !== undefined) return prompt;
   const block = loadDoc("deploy-prompt")?.blocks.find(
     (b) => b.type === "code" && b.lang === "text",
   );
-  return block?.type === "code" ? block.text : null;
+  return (prompt = block?.type === "code" ? block.text : null);
+}
+
+/**
+ * Origin for the copy-paste commands. NEXT_PUBLIC_APP_URL is the canonical
+ * answer, but a deployment that forgot to set it would otherwise hand every
+ * visitor commands pointing at localhost, so fall back to the request's host.
+ */
+async function deploymentOrigin(): Promise<string> {
+  const configured = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, "");
+  if (URL.canParse(configured)) return new URL(configured).origin;
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("host");
+  return host ? `${requestHeaders.get("x-forwarded-proto") ?? "https"}://${host}` : "";
 }
 
 const SECTIONS = [
@@ -46,10 +66,10 @@ const SECTIONS = [
 
 export default async function DocsIntroductionPage() {
   const repoUrl = publicRepositoryUrl();
-  const appUrl = publicAppUrl();
+  const appUrl = await deploymentOrigin();
   const trialLimit = trialTraceLimitFromEnv();
   const owner = await getOwner();
-  const prompt = deployPrompt();
+  const setupPrompt = deployPrompt();
 
   return (
     <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_220px] xl:gap-10">
@@ -62,7 +82,7 @@ export default async function DocsIntroductionPage() {
             project you own, and read it back from your agents over MCP.
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
-            {prompt && <CopyButton text={prompt} label="Copy deployment prompt" />}
+            {setupPrompt && <CopyButton text={setupPrompt} label="Copy deployment prompt" />}
             <a
               href={`${repoUrl}#deploy-your-own`}
               className="btn btn-ghost btn-sm"
@@ -120,7 +140,7 @@ export default async function DocsIntroductionPage() {
           agent to install. Any language that can POST JSON is a supported client.
         </p>
         <CodeGroup label="Send a trace" samples={recordSamples(appUrl)} />
-        <Disclosure summary="Response · 201 created">
+        <Disclosure summary="Response · trace stored">
           <CodeGroup label="Ingest response" samples={INGEST_RESPONSE} />
         </Disclosure>
         <p>
@@ -262,7 +282,7 @@ export default async function DocsIntroductionPage() {
           <Link href="/docs/evaluators">scores and evaluators</Link>.
         </p>
         <CodeGroup label="Add a score" samples={scoreSamples(appUrl)} />
-        <Disclosure summary="Response · 201 created">
+        <Disclosure summary="Response · score stored">
           <CodeGroup label="Score response" samples={SCORE_RESPONSE} />
         </Disclosure>
 

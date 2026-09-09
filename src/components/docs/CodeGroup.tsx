@@ -17,7 +17,9 @@ export function CodeGroup({ samples, label }: { samples: CodeSample[]; label: st
   const baseId = useId();
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const current = samples[active];
+  // `active` is only ever set from an index into this array, so this cannot be
+  // undefined for a non-empty one; an empty group has nothing to render.
+  const current: CodeSample | undefined = samples[active];
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     const next: Record<string, number> = {
@@ -33,8 +35,12 @@ export function CodeGroup({ samples, label }: { samples: CodeSample[]; label: st
     listRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus();
   }
 
+  if (!current) return null;
+
   return (
-    <div className="doc-code my-5">
+    // No margin utility here: `.doc-code` supplies one, and a utility would win
+    // over the reset that makes a group sit flush inside a <Disclosure>.
+    <div className="doc-code">
       <div className="doc-code-bar gap-2">
         <div ref={listRef} role="tablist" aria-label={label} onKeyDown={onKeyDown} className="flex">
           {samples.map((sample, i) => (
@@ -64,6 +70,9 @@ export function CodeGroup({ samples, label }: { samples: CodeSample[]; label: st
           id={`${baseId}-panel-${i}`}
           aria-labelledby={`${baseId}-tab-${i}`}
           hidden={i !== active}
+          // Long samples scroll sideways and hold nothing focusable, so the
+          // panel itself has to be reachable for a keyboard user to scroll it.
+          tabIndex={0}
         >
           <code>{sample.code}</code>
         </pre>

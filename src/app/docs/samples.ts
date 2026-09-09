@@ -1,10 +1,80 @@
 import type { CodeSample } from "@/components/docs/CodeGroup";
+import type { IngestRequest, ScoreInput, SpanInput } from "@/lib/firetrace/schema";
 
 /**
  * Copy-paste samples for the introduction page, built against this deployment's
- * own origin. They mirror docs/ingestion-api.md, docs/api.md and docs/mcp.md;
- * when those change, these must change with them.
+ * own origin. The payloads below are typed against the wire schema and checked
+ * against it in tests/unit/docs-samples.test.ts, so they cannot drift into
+ * documenting an API the server would reject.
  */
+
+/** The trace the quickstart tells you to send. */
+export const FIRST_TRACE: IngestRequest = {
+  schemaVersion: 1,
+  trace: {
+    id: "42f38ac8295345a7a12c4e3f60d6da23",
+    name: "answer-question",
+    status: "ok",
+    startedAt: "2026-09-02T19:01:02.120Z",
+    endedAt: "2026-09-02T19:01:04.812Z",
+    model: "example-model",
+    input: { prompt: "Explain vector search in two sentences." },
+    output: {
+      text: "Vector search finds items whose embeddings are nearest to a query embedding.",
+    },
+    usage: { inputTokens: 412, outputTokens: 96, totalTokens: 508 },
+    tags: [],
+    metadata: {},
+    spans: [
+      {
+        id: "00f067aa0ba902b7",
+        parentSpanId: null,
+        name: "generate-text",
+        kind: "llm",
+        status: "ok",
+        startedAt: "2026-09-02T19:01:02.145Z",
+        endedAt: "2026-09-02T19:01:04.780Z",
+        model: "example-model",
+        attributes: {},
+        events: [],
+        usage: {},
+      },
+    ],
+  },
+};
+
+/** The error convention: status plus `error.*` attributes, no dedicated field. */
+export const FAILING_SPAN: SpanInput = {
+  id: "b7ad6b7169203331",
+  parentSpanId: "00f067aa0ba902b7",
+  name: "lookup-example",
+  kind: "tool",
+  status: "error",
+  startedAt: "2026-09-02T19:01:03.050Z",
+  endedAt: "2026-09-02T19:01:03.600Z",
+  input: { tool: "docs.fetch", url: "https://example.com/vector-search" },
+  attributes: {
+    "error.type": "HttpError",
+    "error.message": "HTTP 429 Too Many Requests after 2 retries",
+  },
+  events: [
+    { name: "retry", timestamp: "2026-09-02T19:01:03.220Z", attributes: { attempt: 1 } },
+    { name: "retry", timestamp: "2026-09-02T19:01:03.420Z", attributes: { attempt: 2 } },
+  ],
+  usage: {},
+};
+
+export const HELPFUL_SCORE: ScoreInput = {
+  name: "helpful",
+  dataType: "boolean",
+  value: true,
+  comment: "answered the question",
+};
+
+/** Pretty-printed JSON, every line after the first indented to sit under the shell flag. */
+function json(value: unknown, indent = ""): string {
+  return JSON.stringify(value, null, 2).split("\n").join(`\n${indent}`);
+}
 
 export function mcpSamples(appUrl: string): CodeSample[] {
   return [
@@ -63,34 +133,10 @@ export function recordSamples(appUrl: string): CodeSample[] {
   return [
     {
       label: "cURL",
-      code: `curl -s -X POST ${appUrl}/api/v1/traces \\
-  -H "Authorization: Bearer $FIRETRACE_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "schemaVersion": 1,
-    "trace": {
-      "id": "42f38ac8295345a7a12c4e3f60d6da23",
-      "name": "answer-question",
-      "status": "ok",
-      "startedAt": "2026-09-02T19:01:02.120Z",
-      "endedAt": "2026-09-02T19:01:04.812Z",
-      "model": "example-model",
-      "input": { "prompt": "Explain vector search in two sentences." },
-      "output": { "text": "Vector search finds items whose embeddings are nearest to a query embedding." },
-      "usage": { "inputTokens": 412, "outputTokens": 96, "totalTokens": 508 },
-      "spans": [
-        {
-          "id": "00f067aa0ba902b7",
-          "name": "generate-text",
-          "kind": "llm",
-          "status": "ok",
-          "startedAt": "2026-09-02T19:01:02.145Z",
-          "endedAt": "2026-09-02T19:01:04.780Z",
-          "model": "example-model"
-        }
-      ]
-    }
-  }'`,
+      code: `curl -s -X POST ${appUrl}/api/v1/traces \
+  -H "Authorization: Bearer $FIRETRACE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '${json(FIRST_TRACE, "  ")}'`,
     },
     {
       label: "TypeScript SDK",
@@ -170,24 +216,7 @@ await trace.end({ status: "ok", output: { text }, usage });`,
     },
     {
       label: "A failing span",
-      code: `{
-  "id": "b7ad6b7169203331",
-  "parentSpanId": "00f067aa0ba902b7",
-  "name": "lookup-example",
-  "kind": "tool",
-  "status": "error",
-  "startedAt": "2026-09-02T19:01:03.050Z",
-  "endedAt": "2026-09-02T19:01:03.600Z",
-  "input": { "tool": "docs.fetch", "url": "https://example.com/vector-search" },
-  "attributes": {
-    "error.type": "HttpError",
-    "error.message": "HTTP 429 Too Many Requests after 2 retries"
-  },
-  "events": [
-    { "name": "retry", "timestamp": "2026-09-02T19:01:03.220Z", "attributes": { "attempt": 1 } },
-    { "name": "retry", "timestamp": "2026-09-02T19:01:03.420Z", "attributes": { "attempt": 2 } }
-  ]
-}`,
+      code: json(FAILING_SPAN),
     },
   ];
 }
@@ -229,7 +258,7 @@ export function scoreSamples(appUrl: string): CodeSample[] {
       code: `curl -s -X POST ${appUrl}/api/v1/traces/$TRACE_ID/scores \\
   -H "Authorization: Bearer $FIRETRACE_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"name":"helpful","dataType":"boolean","value":true,"comment":"answered the question"}'`,
+  -d '${JSON.stringify(HELPFUL_SCORE)}'`,
     },
     {
       label: "TypeScript SDK",

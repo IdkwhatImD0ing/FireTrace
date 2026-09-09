@@ -20,11 +20,14 @@ export function DocCard({
   href,
   title,
   eyebrow,
+  labelPrefix,
   children,
 }: {
   href: string;
   title: string;
   eyebrow?: string;
+  /** Folds the eyebrow into the link's accessible name, e.g. "Next: Ingestion API". */
+  labelPrefix?: string;
   children?: ReactNode;
 }) {
   const external = /^https?:\/\//.test(href);
@@ -34,16 +37,23 @@ export function DocCard({
       {external && <span aria-hidden="true"> ↗</span>}
     </>
   );
+  const accessibleName = labelPrefix ? `${labelPrefix}: ${title}` : undefined;
   return (
     <div className="card relative p-4 transition-colors hover:border-line-2 hover:bg-surface-2">
       {eyebrow && <p className="mono-label mb-1.5">{eyebrow}</p>}
       <h3 className="font-medium text-ink">
         {external ? (
-          <a href={href} target="_blank" rel="noreferrer" className="after:absolute after:inset-0">
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={accessibleName}
+            className="after:absolute after:inset-0"
+          >
             {label}
           </a>
         ) : (
-          <Link href={href} className="after:absolute after:inset-0">
+          <Link href={href} aria-label={accessibleName} className="after:absolute after:inset-0">
             {label}
           </Link>
         )}

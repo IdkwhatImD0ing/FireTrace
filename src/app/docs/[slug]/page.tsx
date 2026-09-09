@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { CardGrid, DocCard } from "@/components/docs/Cards";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { loadDoc } from "@/lib/docs/load";
+import { slugifyHeading } from "@/lib/docs/markdown";
 import { DOCS, findDoc } from "@/lib/docs/registry";
 import { renderBlocks } from "@/lib/docs/render";
 
@@ -33,7 +34,13 @@ export default async function DocPage({ params }: PageProps<"/docs/[slug]">) {
       <div className="min-w-0">
         <header className="mb-8 max-w-3xl border-b border-line pb-6">
           <p className="mono-label">{doc.entry.group}</p>
-          <h1 className="mt-2 font-display text-5xl leading-none text-ink">{doc.title}</h1>
+          {/* Same anchor renderBlocks used to give the H1, so old #title links still land. */}
+          <h1
+            id={slugifyHeading(doc.title)}
+            className="mt-2 scroll-mt-24 font-display text-5xl leading-none text-ink"
+          >
+            {doc.title}
+          </h1>
           <p className="mt-3 text-lg text-ink-2">{doc.entry.summary}</p>
           <div className="mt-5 flex flex-wrap gap-2">
             <CopyButton text={doc.source} label="Copy page as Markdown" />
@@ -52,12 +59,22 @@ export default async function DocPage({ params }: PageProps<"/docs/[slug]">) {
           {(previous || next) && (
             <CardGrid>
               {previous && (
-                <DocCard href={`/docs/${previous.slug}`} title={previous.title} eyebrow="Previous">
+                <DocCard
+                  href={`/docs/${previous.slug}`}
+                  title={previous.title}
+                  eyebrow="Previous"
+                  labelPrefix="Previous"
+                >
                   {previous.summary}
                 </DocCard>
               )}
               {next && (
-                <DocCard href={`/docs/${next.slug}`} title={next.title} eyebrow="Next">
+                <DocCard
+                  href={`/docs/${next.slug}`}
+                  title={next.title}
+                  eyebrow="Next"
+                  labelPrefix="Next"
+                >
                   {next.summary}
                 </DocCard>
               )}
