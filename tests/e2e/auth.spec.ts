@@ -36,22 +36,25 @@ test.describe("dashboard sign-in through the Auth emulator", () => {
   });
 
   test("the public headers offer sign-in only while there is no session", async ({ page }) => {
+    // The site header is the banner landmark; page content may carry its own
+    // <header> and its own sign-in call to action, which this test is not about.
+    const banner = page.getByRole("banner");
     await page.goto("/");
-    await expect(page.locator('header a[href="/login"]')).toHaveText("Sign in");
+    await expect(banner.locator('a[href="/login"]')).toHaveText("Sign in");
     await expect(page.getByTestId("trial-invite")).toBeVisible();
     await page.goto("/docs");
-    await expect(page.locator('header a[href="/login"]')).toHaveText("Sign in");
+    await expect(banner.locator('a[href="/login"]')).toHaveText("Sign in");
 
     await signIn(page, OWNER);
     await page.waitForURL(/\/projects$/);
 
     await page.goto("/");
-    await expect(page.locator('header a[href="/projects"]')).toHaveText("Projects");
-    await expect(page.locator('header a[href="/login"]')).toHaveCount(0);
+    await expect(banner.locator('a[href="/projects"]')).toHaveText("Projects");
+    await expect(banner.locator('a[href="/login"]')).toHaveCount(0);
     await expect(page.getByTestId("trial-invite")).toHaveCount(0);
     await page.goto("/docs");
-    await expect(page.locator('header a[href="/projects"]')).toHaveText("Projects");
-    await expect(page.locator('header a[href="/login"]')).toHaveCount(0);
+    await expect(banner.locator('a[href="/projects"]')).toHaveText("Projects");
+    await expect(banner.locator('a[href="/login"]')).toHaveCount(0);
   });
 
   test("a wrong password is rejected and gets no session", async ({ page, context }) => {

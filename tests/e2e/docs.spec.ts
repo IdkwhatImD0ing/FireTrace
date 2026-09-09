@@ -25,23 +25,32 @@ test.describe("documentation pages", () => {
       .evaluateAll((links) => links.map((l) => l.getAttribute("href") ?? ""))) {
       await expect(page.locator(href)).toHaveCount(1);
     }
-    // The list tracks the section the reader is under.
-    await page.locator("#judge").scrollIntoViewIfNeeded();
+    // The list tracks the section the reader is under: the heading has to be
+    // above the cutoff, which scrollIntoViewIfNeeded (bottom of viewport) is not.
+    await page.evaluate(() => {
+      const heading = document.getElementById("judge");
+      if (heading) window.scrollTo(0, heading.getBoundingClientRect().top + window.scrollY - 40);
+    });
     await expect(toc.locator("a[aria-current]")).toHaveText("Judge");
   });
 
   test("the introduction shows tabbed code samples and a collapsed response", async ({ page }) => {
     await page.goto("/docs");
-    // Scoped by the group's own accessible name, so edits to the prose cannot break this.
+    // Scoped by the group's own accessible name, so edits to the prose cannot
+    // break this. Each panel is labelled by its tab, and a hidden panel is out
+    // of the accessibility tree, so this works for either CodeGroup variant.
     const mcp = page.getByRole("tablist", { name: "MCP client setup" });
-    const panel = () => page.locator(".doc-code").filter({ has: mcp }).locator("pre:not([hidden])");
     await expect(mcp.getByRole("tab", { name: "Claude Code" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    await expect(panel()).toContainText("claude mcp add --transport http firetrace");
+    await expect(page.getByRole("tabpanel", { name: "Claude Code" })).toContainText(
+      "claude mcp add --transport http firetrace",
+    );
     await mcp.getByRole("tab", { name: "stdio" }).click();
-    await expect(panel()).toContainText("@firetrace/mcp");
+    await expect(page.getByRole("tabpanel", { name: "stdio" })).toContainText("@firetrace/mcp");
+    // Switching tabs swaps the panel rather than showing both.
+    await expect(page.getByRole("tabpanel", { name: "Claude Code" })).toHaveCount(0);
     // Response bodies start collapsed.
     const response = page.locator("details").filter({ hasText: "Response · trace stored" });
     await expect(response.locator("pre")).toBeHidden();
