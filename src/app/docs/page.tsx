@@ -4,6 +4,7 @@ import Link from "next/link";
 import { CardGrid, DocCard } from "@/components/docs/Cards";
 import { CodeGroup } from "@/components/docs/CodeGroup";
 import { Disclosure } from "@/components/docs/Disclosure";
+import { OnThisPage } from "@/components/docs/OnThisPage";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { getOwner } from "@/lib/auth/session";
 import { loadDoc } from "@/lib/docs/load";
@@ -53,15 +54,17 @@ async function deploymentOrigin(): Promise<string> {
 }
 
 const SECTIONS = [
-  { id: "get-started", text: "Get started" },
-  { id: "other-ways-to-get-started", text: "Other ways to get started" },
-  { id: "what-can-firetrace-do", text: "What can FireTrace do?" },
-  { id: "why-firetrace", text: "Why FireTrace?" },
-  { id: "record", text: "Record" },
-  { id: "read", text: "Read" },
-  { id: "judge", text: "Judge" },
-  { id: "more-capabilities", text: "More capabilities" },
-  { id: "resources", text: "Resources" },
+  { id: "get-started", text: "Get started", level: 2 },
+  { id: "connect-an-agent", text: "Connect an agent over MCP", level: 3 },
+  { id: "send-your-first-trace", text: "Send your first trace", level: 3 },
+  { id: "other-ways-to-get-started", text: "Other ways to get started", level: 2 },
+  { id: "what-can-firetrace-do", text: "What can FireTrace do?", level: 2 },
+  { id: "why-firetrace", text: "Why FireTrace?", level: 2 },
+  { id: "record", text: "Record", level: 2 },
+  { id: "read", text: "Read", level: 2 },
+  { id: "judge", text: "Judge", level: 2 },
+  { id: "more-capabilities", text: "More capabilities", level: 2 },
+  { id: "resources", text: "Resources", level: 2 },
 ];
 
 export default async function DocsIntroductionPage() {
@@ -118,13 +121,24 @@ export default async function DocsIntroductionPage() {
         <h3 id="connect-an-agent" className="scroll-mt-24">
           Connect an agent over MCP
         </h3>
-        <p>
-          The fastest way in. Point any Model Context Protocol client at{" "}
-          <code>{appUrl}/api/mcp</code> and your agent can list traces, walk span trees, record its
-          own runs and leave scores. Tools are registered per key scope, so a read-only key never
-          exposes a write tool.
-        </p>
-        <CodeGroup label="MCP client setup" samples={mcpSamples(appUrl)} />
+        <div className="doc-panel">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="m-0 text-base font-medium text-ink">Set up FireTrace MCP</p>
+            <Link href="/docs/mcp" className="text-sm">
+              See all setup options →
+            </Link>
+          </div>
+          <p className="mt-1 mb-4 text-sm">
+            Pick a client, paste the snippet, and your agent can list traces, walk span trees,
+            record its own runs and leave scores. Tools are registered per key scope, so a read-only
+            key never exposes a write tool.
+          </p>
+          <CodeGroup label="MCP client setup" variant="tiles" samples={mcpSamples(appUrl)} />
+          <p className="mt-3 mb-0 text-sm">
+            Using another MCP client? Point it at <code>{appUrl}/api/mcp</code> with an{" "}
+            <code>Authorization: Bearer</code> header.
+          </p>
+        </div>
         <p>
           Give an investigating agent a <strong>read-only</strong> key with an expiry, then ask it
           something like{" "}
@@ -158,29 +172,45 @@ export default async function DocsIntroductionPage() {
           Other ways to get started
         </h2>
         <CardGrid>
-          <DocCard href="/docs/deploy-prompt" title="Deploy with an AI agent" eyebrow="Fastest">
+          <DocCard
+            href="/docs/deploy-prompt"
+            title="Deploy with an AI agent"
+            icon="agent"
+            eyebrow="Fastest"
+          >
             Paste one prompt into your coding agent. It creates the Firebase project, sets the
             environment variables, deploys to Vercel and sends a smoke-test trace.
           </DocCard>
           <DocCard
             href="/docs/firebase-setup"
             title="Set up Firebase by hand"
+            icon="database"
             eyebrow="Step by step"
           >
             Create the project and database, enable sign-in providers, and mint the Admin credential
             the server uses.
           </DocCard>
-          <DocCard href="/docs/vercel-deployment" title="Deploy to Vercel" eyebrow="Step by step">
+          <DocCard
+            href="/docs/vercel-deployment"
+            title="Deploy to Vercel"
+            icon="spark"
+            eyebrow="Step by step"
+          >
             Import the repository, set the environment variables, authorize the domain, and run the
             smoke test.
           </DocCard>
           {trialLimit > 0 && !owner ? (
-            <DocCard href="/login" title="Try it on this deployment" eyebrow="No deploy">
+            <DocCard
+              href="/login"
+              title="Try it on this deployment"
+              icon="check"
+              eyebrow="No deploy"
+            >
               Sign in with any verified Google or email account and record up to {trialLimit} traces
               against this instance before you deploy your own.
             </DocCard>
           ) : (
-            <DocCard href={repoUrl} title="Read the source" eyebrow="MIT licensed">
+            <DocCard href={repoUrl} title="Read the source" icon="github" eyebrow="MIT licensed">
               Next.js on Vercel, Firestore and Firebase Auth. Nothing runs that you cannot read.
             </DocCard>
           )}
@@ -190,15 +220,15 @@ export default async function DocsIntroductionPage() {
           What can FireTrace do?
         </h2>
         <CardGrid columns={3}>
-          <DocCard href="/docs/ingestion-api" title="Record">
+          <DocCard href="/docs/ingestion-api" title="Record" icon="terminal">
             One POST stores a run as a tree of spans with inputs, outputs, tokens, cost, errors and
             tags.
           </DocCard>
-          <DocCard href="/docs/api" title="Read">
+          <DocCard href="/docs/api" title="Read" icon="list">
             Filter and page through traces from the dashboard, the REST API or an agent; open one as
             a span tree, waterfall and inspector.
           </DocCard>
-          <DocCard href="/docs/evaluators" title="Judge">
+          <DocCard href="/docs/evaluators" title="Judge" icon="check">
             Attach typed scores by hand, from an agent, or from an LLM-as-judge evaluator you
             define.
           </DocCard>
@@ -290,35 +320,43 @@ export default async function DocsIntroductionPage() {
           More capabilities
         </h2>
         <CardGrid>
-          <DocCard href="/docs/api#environments" title="Environments">
+          <DocCard href="/docs/api#environments" title="Environments" icon="layers">
             Label a key <code>production</code>, <code>preview</code> or your own slug; the server
             stamps it on every trace and the dashboard filters by it.
           </DocCard>
-          <DocCard href="/docs/api#api-keys-and-scopes" title="Scoped keys">
+          <DocCard href="/docs/api#api-keys-and-scopes" title="Scoped keys" icon="key">
             <code>traces:write</code>, <code>traces:read</code> and <code>traces:delete</code>, with
             optional expiry and one-transaction rotation.
           </DocCard>
-          <DocCard href="/docs/ingestion-api#updating-metadata" title="Metadata patch">
+          <DocCard
+            href="/docs/ingestion-api#updating-metadata"
+            title="Metadata patch"
+            icon="pencil"
+          >
             <code>PATCH</code> merges free-form facts into a stored trace without touching its body
             hash, for judgements that only arrive later.
           </DocCard>
-          <DocCard href="/docs/ingestion-api#idempotency" title="Idempotent ingest">
+          <DocCard href="/docs/ingestion-api#idempotency" title="Idempotent ingest" icon="refresh">
             The body hash is computed after normalization, so a retry that differs only in key order
             or timestamp notation is a duplicate, not a conflict.
           </DocCard>
-          <DocCard href="/docs/mcp#tools" title="MCP tools">
+          <DocCard href="/docs/mcp#tools" title="MCP tools" icon="plug">
             <code>list_traces</code>, <code>get_trace</code>, <code>find_spans</code>,{" "}
             <code>record_trace</code>, <code>add_score</code> and more, registered per key scope.
           </DocCard>
-          <DocCard href="/docs/evaluators#run-an-evaluator" title="LLM-as-judge evaluators">
+          <DocCard
+            href="/docs/evaluators#run-an-evaluator"
+            title="LLM-as-judge evaluators"
+            icon="spark"
+          >
             Point FireTrace at any OpenAI-compatible endpoint, define a judge from a template, and
             run it over a trace or a filtered list.
           </DocCard>
-          <DocCard href="/docs/security" title="Security model">
+          <DocCard href="/docs/security" title="Security model" icon="shield">
             Deny-all Firestore rules, Admin-SDK-only access, HMAC key digests, origin checks and a
             deployment checklist.
           </DocCard>
-          <DocCard href="/docs/api#operational-notes" title="Operational notes">
+          <DocCard href="/docs/api#operational-notes" title="Operational notes" icon="gauge">
             What each call costs in Firestore reads, what is cacheable, and how cold starts show up
             in latency.
           </DocCard>
@@ -328,18 +366,22 @@ export default async function DocsIntroductionPage() {
           Resources
         </h2>
         <CardGrid>
-          <DocCard href="/docs/api" title="API reference">
+          <DocCard href="/docs/api" title="API reference" icon="book">
             Every key-authenticated endpoint, with scopes, filters, responses and error codes.
           </DocCard>
-          <DocCard href="/docs/ingestion-api" title="Ingestion API">
+          <DocCard href="/docs/ingestion-api" title="Ingestion API" icon="book">
             The wire format in full: field rules, limits, normalization, idempotency, error
             conventions.
           </DocCard>
-          <DocCard href={`${repoUrl}/tree/main/packages/sdk-js`} title="TypeScript SDK">
+          <DocCard
+            href={`${repoUrl}/tree/main/packages/sdk-js`}
+            title="TypeScript SDK"
+            icon="package"
+          >
             <code>@firetrace/sdk</code> — no runtime dependencies, never throws into your
             application unless you ask it to.
           </DocCard>
-          <DocCard href={repoUrl} title="Source on GitHub">
+          <DocCard href={repoUrl} title="Source on GitHub" icon="github">
             The whole application, MIT licensed. Fork it, audit it, run it yourself.
           </DocCard>
         </CardGrid>
@@ -356,16 +398,22 @@ export default async function DocsIntroductionPage() {
         className="hidden xl:sticky xl:top-20 xl:block xl:self-start"
         aria-label="On this page"
       >
-        <p className="mono-label mb-2">On this page</p>
-        <ul className="space-y-1 border-l border-line text-sm">
-          {SECTIONS.map((section) => (
-            <li key={section.id} className="pl-3">
-              <a href={`#${section.id}`} className="block py-0.5 text-ink-2 hover:text-ink">
-                {section.text}
-              </a>
-            </li>
-          ))}
-        </ul>
+        <OnThisPage items={SECTIONS} />
+        <div className="card mt-6 p-4">
+          <p className="text-sm font-medium text-ink">Ready to build?</p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-2">
+            Deploy FireTrace to your own Vercel and Firebase accounts. MIT licensed, no seats, and
+            no retention window.
+          </p>
+          <a
+            href={`${repoUrl}#deploy-your-own`}
+            className="btn btn-primary btn-sm mt-3 w-full"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Deploy your own
+          </a>
+        </div>
       </aside>
     </div>
   );

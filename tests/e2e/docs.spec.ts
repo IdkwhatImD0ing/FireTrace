@@ -18,12 +18,16 @@ test.describe("documentation pages", () => {
       await expect(main.locator(`a[href^="/docs/${slug}"]`).first()).toBeVisible();
     }
     // The hand-written "On this page" list must match the headings it points at.
+    // Scoped to the list: the aside also holds the "Deploy your own" CTA.
     const toc = page.getByRole("complementary", { name: "On this page" });
     for (const href of await toc
-      .getByRole("link")
+      .locator("ul a")
       .evaluateAll((links) => links.map((l) => l.getAttribute("href") ?? ""))) {
       await expect(page.locator(href)).toHaveCount(1);
     }
+    // The list tracks the section the reader is under.
+    await page.locator("#judge").scrollIntoViewIfNeeded();
+    await expect(toc.locator("a[aria-current]")).toHaveText("Judge");
   });
 
   test("the introduction shows tabbed code samples and a collapsed response", async ({ page }) => {

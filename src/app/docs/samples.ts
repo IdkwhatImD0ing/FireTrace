@@ -80,11 +80,17 @@ export function mcpSamples(appUrl: string): CodeSample[] {
   return [
     {
       label: "Claude Code",
+      icon: "terminal",
+      hint: "Run in terminal",
+      lang: "bash",
       code: `claude mcp add --transport http firetrace ${appUrl}/api/mcp \\
   --header "Authorization: Bearer ft_live_..."`,
     },
     {
       label: "JSON clients",
+      icon: "braces",
+      hint: "Cursor, Claude Desktop",
+      lang: "json",
       code: `{
   "mcpServers": {
     "firetrace": {
@@ -97,6 +103,9 @@ export function mcpSamples(appUrl: string): CodeSample[] {
     },
     {
       label: "stdio",
+      icon: "plug",
+      hint: "Local-process clients",
+      lang: "json",
       code: `{
   "mcpServers": {
     "firetrace": {
@@ -112,6 +121,9 @@ export function mcpSamples(appUrl: string): CodeSample[] {
     },
     {
       label: "Your own agent",
+      icon: "code",
+      hint: "TypeScript",
+      lang: "ts",
       code: `import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -133,13 +145,15 @@ export function recordSamples(appUrl: string): CodeSample[] {
   return [
     {
       label: "cURL",
-      code: `curl -s -X POST ${appUrl}/api/v1/traces \
-  -H "Authorization: Bearer $FIRETRACE_API_KEY" \
-  -H "Content-Type: application/json" \
+      lang: "bash",
+      code: `curl -s -X POST ${appUrl}/api/v1/traces \\
+  -H "Authorization: Bearer $FIRETRACE_API_KEY" \\
+  -H "Content-Type: application/json" \\
   -d '${json(FIRST_TRACE, "  ")}'`,
     },
     {
       label: "TypeScript SDK",
+      lang: "ts",
       code: `import { FireTrace } from "@firetrace/sdk";
 
 const client = new FireTrace({
@@ -162,6 +176,7 @@ if (sent.ok) console.log(sent.response.traceId, sent.response.duplicate);`,
     },
     {
       label: "fetch",
+      lang: "ts",
       code: `const body = {
   schemaVersion: 1,
   trace: {
@@ -195,6 +210,7 @@ export function spanSamples(): CodeSample[] {
   return [
     {
       label: "Nested spans",
+      lang: "ts",
       code: `const trace = client.startTrace("answer-question", { input: { prompt } });
 
 const agent = trace.startSpan("answer-question", { kind: "agent" });
@@ -216,6 +232,7 @@ await trace.end({ status: "ok", output: { text }, usage });`,
     },
     {
       label: "A failing span",
+      lang: "json",
       code: json(FAILING_SPAN),
     },
   ];
@@ -225,11 +242,13 @@ export function readSamples(appUrl: string): CodeSample[] {
   return [
     {
       label: "cURL",
+      lang: "bash",
       code: `curl -s "${appUrl}/api/v1/traces?status=error&limit=5" \\
   -H "Authorization: Bearer $FIRETRACE_API_KEY"`,
     },
     {
       label: "TypeScript SDK",
+      lang: "ts",
       code: `import { FireTraceApi } from "@firetrace/sdk";
 
 const api = new FireTraceApi({
@@ -243,6 +262,7 @@ for await (const trace of api.iterateTraces({ model: "example-model" })) console
     },
     {
       label: "Agent prompt",
+      lang: "text",
       code: `Using the firetrace MCP server, list the last 10 error traces in this
 project. For the slowest one, find the failing span with find_spans, read
 the surrounding input and output with get_trace, and tell me what broke.
@@ -255,6 +275,7 @@ export function scoreSamples(appUrl: string): CodeSample[] {
   return [
     {
       label: "cURL",
+      lang: "bash",
       code: `curl -s -X POST ${appUrl}/api/v1/traces/$TRACE_ID/scores \\
   -H "Authorization: Bearer $FIRETRACE_API_KEY" \\
   -H "Content-Type: application/json" \\
@@ -262,6 +283,7 @@ export function scoreSamples(appUrl: string): CodeSample[] {
     },
     {
       label: "TypeScript SDK",
+      lang: "ts",
       code: `await api.addScore(traceId, {
   name: "helpful",
   dataType: "boolean",
@@ -279,6 +301,7 @@ const helpful = await api.listScores({ name: "helpful", limit: 100 });`,
 export const INGEST_RESPONSE: CodeSample[] = [
   {
     label: "JSON",
+    lang: "json",
     code: `{
   "ok": true,
   "traceId": "42f38ac8295345a7a12c4e3f60d6da23",
@@ -293,6 +316,7 @@ export const INGEST_RESPONSE: CodeSample[] = [
 export const LIST_RESPONSE: CodeSample[] = [
   {
     label: "JSON",
+    lang: "json",
     code: `{
   "traces": [
     {
@@ -334,6 +358,7 @@ export const LIST_RESPONSE: CodeSample[] = [
 export const SCORE_RESPONSE: CodeSample[] = [
   {
     label: "JSON",
+    lang: "json",
     code: `{
   "ok": true,
   "score": {

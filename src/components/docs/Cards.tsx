@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { Icon, type IconName } from "@/components/docs/Icons";
 
 /** Card grid used across the docs. Two columns by default, three when asked. */
 export function CardGrid({ columns = 2, children }: { columns?: 2 | 3; children: ReactNode }) {
@@ -20,12 +21,14 @@ export function DocCard({
   href,
   title,
   eyebrow,
+  icon,
   labelPrefix,
   children,
 }: {
   href: string;
   title: string;
   eyebrow?: string;
+  icon?: IconName;
   /** Folds the eyebrow into the link's accessible name, e.g. "Next: Ingestion API". */
   labelPrefix?: string;
   children?: ReactNode;
@@ -40,6 +43,7 @@ export function DocCard({
   const accessibleName = labelPrefix ? `${labelPrefix}: ${title}` : undefined;
   return (
     <div className="card relative p-4 transition-colors hover:border-line-2 hover:bg-surface-2">
+      {icon && <Icon name={icon} className="mb-2 text-ember-2" />}
       {eyebrow && <p className="mono-label mb-1.5">{eyebrow}</p>}
       <h3 className="font-medium text-ink">
         {external ? (

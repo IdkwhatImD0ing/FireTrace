@@ -9,6 +9,7 @@ import {
   scoreSamples,
   spanSamples,
 } from "@/app/docs/samples";
+import { HIGHLIGHTED_LANGUAGES } from "@/lib/docs/highlight";
 import { ingestRequestSchema, scoreInputSchema, spanInputSchema } from "@/lib/firetrace/schema";
 
 /**
@@ -45,6 +46,22 @@ describe("introduction page samples", () => {
 
     const span = spanSamples().find((s) => s.label === "A failing span");
     expect(span?.code).toContain(FAILING_SPAN.id);
+  });
+
+  it("labels every sample with a language the highlighter knows", () => {
+    const all = [
+      ...mcpSamples("https://example.test"),
+      ...recordSamples("https://example.test"),
+      ...spanSamples(),
+      ...readSamples("https://example.test"),
+      ...scoreSamples("https://example.test"),
+    ];
+    for (const sample of all) {
+      // "text" is the deliberate opt-out (the agent prompt is prose, not code);
+      // anything else must highlight, so a typo cannot silently disable it.
+      const known = sample.lang === "text" || HIGHLIGHTED_LANGUAGES.has(sample.lang);
+      expect(known, `${sample.label} has lang "${sample.lang}"`).toBe(true);
+    }
   });
 
   it("points every sample at the deployment it was built for", () => {

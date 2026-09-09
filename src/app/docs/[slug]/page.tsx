@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CardGrid, DocCard } from "@/components/docs/Cards";
+import { OnThisPage } from "@/components/docs/OnThisPage";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { loadDoc } from "@/lib/docs/load";
 import { slugifyHeading } from "@/lib/docs/markdown";
@@ -99,16 +100,7 @@ export default async function DocPage({ params }: PageProps<"/docs/[slug]">) {
           className="hidden xl:sticky xl:top-20 xl:block xl:self-start"
           aria-label="On this page"
         >
-          <p className="mono-label mb-2">On this page</p>
-          <ul className="space-y-1 border-l border-line text-sm">
-            {doc.toc.map((entry) => (
-              <li key={entry.id} className={entry.level === 3 ? "pl-6" : "pl-3"}>
-                <a href={`#${entry.id}`} className="block py-0.5 text-ink-2 hover:text-ink">
-                  {entry.text}
-                </a>
-              </li>
-            ))}
-          </ul>
+          <OnThisPage items={doc.toc} />
         </aside>
       )}
     </div>
