@@ -115,6 +115,14 @@
   .table-dense tbody tr {
     @apply border-t border-line/70 transition-colors hover:bg-surface-2/70;
   }
+  /* Code highlighting (src/lib/docs/highlight.ts) extends the JSON palette below. */
+  .tok-comment {
+    color: var(--color-ink-3);
+    font-style: italic;
+  }
+  .tok-command {
+    color: var(--color-ember-2);
+  }
   .json-key {
     color: var(--color-ember-2);
   }
@@ -170,7 +178,8 @@
   .doc-prose p {
     @apply my-4;
   }
-  .doc-prose a {
+  /* Buttons opt out: a .btn inside the prose column keeps its own styling. */
+  .doc-prose a:not(.btn) {
     @apply text-ember-2 underline decoration-ember/40 underline-offset-2 hover:decoration-ember-2;
   }
   .doc-prose strong {
@@ -211,6 +220,48 @@
   }
   .doc-code pre.doc-code-wrap {
     @apply break-words whitespace-pre-wrap;
+  }
+  /* A highlighted block inside the prose column, e.g. the MCP setup card. */
+  .doc-panel {
+    @apply my-5 rounded-lg border border-line bg-surface p-4;
+    box-shadow: var(--shadow-panel);
+  }
+  .doc-panel > .doc-code,
+  .doc-panel .doc-code {
+    @apply mb-0;
+  }
+  /* Card grids sit inside .doc-prose; the prose heading and link rules must not reach them. */
+  .doc-cards h3 {
+    @apply mt-0 mb-0 text-base font-medium;
+  }
+  /* The second selector matches the specificity of `.doc-prose a:not(.btn)` and comes after it. */
+  .doc-cards a,
+  .doc-prose .doc-cards a {
+    @apply text-ink no-underline;
+  }
+  .doc-cards p {
+    @apply mt-1.5 mb-0;
+  }
+  .doc-disclosure {
+    @apply my-5 overflow-hidden rounded-md border border-line bg-bg-2;
+  }
+  .doc-disclosure summary {
+    @apply cursor-pointer list-none px-3 py-2 text-sm text-ink-2 select-none hover:text-ink;
+  }
+  .doc-disclosure summary::-webkit-details-marker {
+    display: none;
+  }
+  .doc-disclosure summary::before {
+    content: "▸ ";
+  }
+  .doc-disclosure[open] summary {
+    @apply border-b border-line;
+  }
+  .doc-disclosure[open] summary::before {
+    content: "▾ ";
+  }
+  .doc-disclosure-body > .doc-code {
+    @apply my-0 rounded-none border-0;
   }
   .doc-table {
     @apply my-5 overflow-x-auto rounded-md border border-line;

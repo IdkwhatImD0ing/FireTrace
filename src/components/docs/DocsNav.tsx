@@ -16,7 +16,7 @@ export function DocsNav() {
         }`}
         aria-current={pathname === "/docs" ? "page" : undefined}
       >
-        Overview
+        Introduction
       </Link>
       {DOC_GROUPS.map((group) => (
         <div key={group}>

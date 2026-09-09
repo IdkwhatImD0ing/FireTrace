@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { Code } from "@/components/docs/Code";
 import { CopyButton } from "@/components/ui/CopyButton";
 import type { Block, Inline } from "./markdown";
 
@@ -88,11 +89,14 @@ function CodeBlock({ lang, text }: { lang: string; text: string }) {
   return (
     <div className="doc-code">
       <div className="doc-code-bar">
-        <span className="mono-label">{lang || "text"}</span>
+        {/* Same weight as a CodeGroup tab, so a lone block and a group read alike. */}
+        <span className="rounded bg-surface-3 px-2 py-1 font-mono text-[12px] text-ink">
+          {lang || "text"}
+        </span>
         <CopyButton text={text} className="btn btn-ghost btn-sm" />
       </div>
-      <pre className={wrap ? "doc-code-wrap" : undefined}>
-        <code>{text}</code>
+      <pre className={wrap ? "doc-code-wrap" : undefined} tabIndex={0}>
+        <Code code={text} lang={lang} />
       </pre>
     </div>
   );

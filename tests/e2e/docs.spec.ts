@@ -1,16 +1,61 @@
 import { expect, test } from "@playwright/test";
+import { DOCS } from "../../src/lib/docs/registry";
 
 /** The public documentation pages need no session and render the committed Markdown. */
 test.describe("documentation pages", () => {
-  test("the index lists every guide with working links", async ({ page }) => {
+  test("the introduction lists every guide with working links", async ({ page }) => {
     const res = await page.goto("/docs");
     expect(res?.status()).toBe(200);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Run FireTrace");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Introduction");
     const nav = page.getByRole("navigation", { name: "Documentation" });
     await expect(nav.getByRole("link", { name: "API", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "MCP", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Deploy with an AI agent" })).toBeVisible();
     await expect(page.getByRole("link", { name: "/api/v1/openapi.json" })).toBeVisible();
+    // Every registered doc must be reachable from the introduction, not only from the sidebar.
+    const main = page.locator("main");
+    for (const { slug } of DOCS) {
+      await expect(main.locator(`a[href^="/docs/${slug}"]`).first()).toBeVisible();
+    }
+    // The hand-written "On this page" list must match the headings it points at.
+    // Scoped to the list: the aside also holds the "Deploy your own" CTA.
+    const toc = page.getByRole("complementary", { name: "On this page" });
+    for (const href of await toc
+      .locator("ul a")
+      .evaluateAll((links) => links.map((l) => l.getAttribute("href") ?? ""))) {
+      await expect(page.locator(href)).toHaveCount(1);
+    }
+    // The list tracks the section the reader is under: the heading has to be
+    // above the cutoff, which scrollIntoViewIfNeeded (bottom of viewport) is not.
+    await page.evaluate(() => {
+      const heading = document.getElementById("judge");
+      if (heading) window.scrollTo(0, heading.getBoundingClientRect().top + window.scrollY - 40);
+    });
+    await expect(toc.locator("a[aria-current]")).toHaveText("Judge");
+  });
+
+  test("the introduction shows tabbed code samples and a collapsed response", async ({ page }) => {
+    await page.goto("/docs");
+    // Scoped by the group's own accessible name, so edits to the prose cannot
+    // break this. Each panel is labelled by its tab, and a hidden panel is out
+    // of the accessibility tree, so this works for either CodeGroup variant.
+    const mcp = page.getByRole("tablist", { name: "MCP client setup" });
+    await expect(mcp.getByRole("tab", { name: "Claude Code" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByRole("tabpanel", { name: "Claude Code" })).toContainText(
+      "claude mcp add --transport http firetrace",
+    );
+    await mcp.getByRole("tab", { name: "stdio" }).click();
+    await expect(page.getByRole("tabpanel", { name: "stdio" })).toContainText("@firetrace/mcp");
+    // Switching tabs swaps the panel rather than showing both.
+    await expect(page.getByRole("tabpanel", { name: "Claude Code" })).toHaveCount(0);
+    // Response bodies start collapsed.
+    const response = page.locator("details").filter({ hasText: "Response · trace stored" });
+    await expect(response.locator("pre")).toBeHidden();
+    await response.getByText("Response · trace stored").click();
+    await expect(response.locator("pre")).toContainText('"duplicate": false');
   });
 
   test("a reference page renders headings with anchors, tables, code with copy buttons, and rewritten links", async ({
@@ -19,6 +64,9 @@ test.describe("documentation pages", () => {
     const res = await page.goto("/docs/api");
     expect(res?.status()).toBe(200);
     await expect(page.getByRole("heading", { level: 1, name: "FireTrace API" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy page as Markdown" })).toBeVisible();
+    // The title is rendered once, by the page header rather than by the article.
+    await expect(page.locator("article h1")).toHaveCount(0);
     await expect(page.locator("h2#api-keys-and-scopes")).toBeVisible();
     await expect(page.locator(".doc-table table").first()).toBeVisible();
     await expect(
