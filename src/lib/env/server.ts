@@ -14,6 +14,16 @@ export function publicRepositoryUrl(): string {
   return (process.env.NEXT_PUBLIC_REPOSITORY_URL || DEFAULT_REPOSITORY_URL).replace(/\/+$/, "");
 }
 
+/** Deployment origin for the copy-paste commands on public pages; never throws. */
+export function publicAppUrl(): string {
+  const raw = (process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "http://localhost:3000";
+  }
+}
+
 const serverSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   NEXT_PUBLIC_FIREBASE_PROJECT_ID: z.string().min(1),

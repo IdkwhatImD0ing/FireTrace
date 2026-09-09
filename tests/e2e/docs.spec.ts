@@ -2,15 +2,36 @@ import { expect, test } from "@playwright/test";
 
 /** The public documentation pages need no session and render the committed Markdown. */
 test.describe("documentation pages", () => {
-  test("the index lists every guide with working links", async ({ page }) => {
+  test("the introduction lists every guide with working links", async ({ page }) => {
     const res = await page.goto("/docs");
     expect(res?.status()).toBe(200);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Run FireTrace");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Introduction");
     const nav = page.getByRole("navigation", { name: "Documentation" });
     await expect(nav.getByRole("link", { name: "API", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "MCP", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Deploy with an AI agent" })).toBeVisible();
     await expect(page.getByRole("link", { name: "/api/v1/openapi.json" })).toBeVisible();
+  });
+
+  test("the introduction shows tabbed code samples and a collapsed response", async ({ page }) => {
+    await page.goto("/docs");
+    const mcp = page.getByRole("tablist", { name: "MCP client setup" });
+    await expect(mcp.getByRole("tab", { name: "Claude Code" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.locator("#connect-an-agent + p + .doc-code pre:not([hidden])")).toContainText(
+      "claude mcp add --transport http firetrace",
+    );
+    await mcp.getByRole("tab", { name: "stdio" }).click();
+    await expect(page.locator("#connect-an-agent + p + .doc-code pre:not([hidden])")).toContainText(
+      "@firetrace/mcp",
+    );
+    // Response bodies start collapsed.
+    const response = page.locator("details").filter({ hasText: "Response · 201 created" }).first();
+    await expect(response.locator("pre")).toBeHidden();
+    await response.getByText("Response · 201 created").click();
+    await expect(response.locator("pre").first()).toContainText('"duplicate": false');
   });
 
   test("a reference page renders headings with anchors, tables, code with copy buttons, and rewritten links", async ({
@@ -19,6 +40,9 @@ test.describe("documentation pages", () => {
     const res = await page.goto("/docs/api");
     expect(res?.status()).toBe(200);
     await expect(page.getByRole("heading", { level: 1, name: "FireTrace API" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy page as Markdown" })).toBeVisible();
+    // The title is rendered once, by the page header rather than by the article.
+    await expect(page.locator("article h1")).toHaveCount(0);
     await expect(page.locator("h2#api-keys-and-scopes")).toBeVisible();
     await expect(page.locator(".doc-table table").first()).toBeVisible();
     await expect(

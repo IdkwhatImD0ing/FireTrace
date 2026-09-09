@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CardGrid, DocCard } from "@/components/docs/Cards";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { loadDoc } from "@/lib/docs/load";
 import { DOCS, findDoc } from "@/lib/docs/registry";
 import { renderBlocks } from "@/lib/docs/render";
@@ -30,31 +31,50 @@ export default async function DocPage({ params }: PageProps<"/docs/[slug]">) {
   return (
     <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_220px] xl:gap-10">
       <div className="min-w-0">
-        <article className="doc-prose">
-          <p className="mono-label mb-2">{doc.entry.group}</p>
-          {renderBlocks(doc.blocks)}
-        </article>
-        <footer className="mt-12 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-6 text-sm">
-          <div className="flex gap-3">
-            {previous && (
-              <Link href={`/docs/${previous.slug}`} className="btn btn-ghost btn-sm">
-                ← {previous.title}
-              </Link>
-            )}
-            {next && (
-              <Link href={`/docs/${next.slug}`} className="btn btn-ghost btn-sm">
-                {next.title} →
-              </Link>
-            )}
+        <header className="mb-8 max-w-3xl border-b border-line pb-6">
+          <p className="mono-label">{doc.entry.group}</p>
+          <h1 className="mt-2 font-display text-5xl leading-none text-ink">{doc.title}</h1>
+          <p className="mt-3 text-lg text-ink-2">{doc.entry.summary}</p>
+          <div className="mt-5 flex flex-wrap gap-2">
+            <CopyButton text={doc.source} label="Copy page as Markdown" />
+            <a
+              href={doc.sourceUrl}
+              className="btn btn-ghost btn-sm"
+              target="_blank"
+              rel="noreferrer"
+            >
+              View source
+            </a>
           </div>
-          <a
-            href={doc.sourceUrl}
-            className="text-ink-2 underline hover:text-ink"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Edit this page on GitHub
-          </a>
+        </header>
+        <article className="doc-prose">{renderBlocks(doc.blocks)}</article>
+        <footer className="mt-12 border-t border-line pt-6">
+          {(previous || next) && (
+            <CardGrid>
+              {previous && (
+                <DocCard href={`/docs/${previous.slug}`} title={previous.title} eyebrow="Previous">
+                  {previous.summary}
+                </DocCard>
+              )}
+              {next && (
+                <DocCard href={`/docs/${next.slug}`} title={next.title} eyebrow="Next">
+                  {next.summary}
+                </DocCard>
+              )}
+            </CardGrid>
+          )}
+          <p className="mt-6 text-sm text-ink-3">
+            This page is rendered from{" "}
+            <code className="font-mono text-ink-2">docs/{doc.entry.file}</code> in the repository.{" "}
+            <a
+              href={doc.sourceUrl}
+              className="text-ink-2 underline hover:text-ink"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Edit this page on GitHub
+            </a>
+          </p>
         </footer>
       </div>
       {doc.toc.length > 1 && (

@@ -15,8 +15,11 @@ import { DOCS, findDoc, type DocEntry } from "./registry";
 export interface LoadedDoc {
   entry: DocEntry;
   title: string;
+  /** The document without its title heading; the page renders that in its own header. */
   blocks: Block[];
   toc: TocEntry[];
+  /** The Markdown as committed, for the "copy page" button that feeds a doc to an agent. */
+  source: string;
   /** The file on GitHub, for an "edit" link. */
   sourceUrl: string;
 }
@@ -47,11 +50,15 @@ export function loadDoc(slug: string): LoadedDoc | null {
   const repo = publicRepositoryUrl();
   const source = readFileSync(join(process.cwd(), "docs", entry.file), "utf8");
   const blocks = mapLinks(parseMarkdown(source), (href) => rewriteDocLink(href, repo));
+  // The page header carries the title, so the body starts after the document's H1.
+  const titleIndex = blocks.findIndex((b) => b.type === "heading" && b.level === 1);
+  const body = titleIndex === -1 ? blocks : blocks.toSpliced(titleIndex, 1);
   return {
     entry,
     title: documentTitle(blocks) ?? entry.title,
-    blocks,
-    toc: tableOfContents(blocks),
+    blocks: body,
+    toc: tableOfContents(body),
+    source,
     sourceUrl: `${repo}/blob/main/docs/${entry.file}`,
   };
 }
