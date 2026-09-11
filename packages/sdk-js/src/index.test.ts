@@ -10,7 +10,14 @@ import {
   serializeError,
   toJsonValue,
 } from "./index.js";
-import type { IngestRequest, IngestResponse, JsonValue, TracePayload } from "./types.js";
+import type {
+  EndTraceRequest,
+  IngestRequest,
+  IngestResponse,
+  JsonValue,
+  SpansRequest,
+  TracePayload,
+} from "./types.js";
 
 const ENDPOINT = "https://firetrace.example.com";
 const KEY = `ft_live_${"0".repeat(16)}_${"1".repeat(64)}`;
@@ -58,7 +65,15 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 }
 
 function okBody(traceId: string, duplicate = false): IngestResponse {
-  return { ok: true, traceId, projectId: "project-1", spanCount: 0, duplicate, requestId: "req-1" };
+  return {
+    ok: true,
+    traceId,
+    projectId: "project-1",
+    spanCount: 0,
+    duplicate,
+    running: false,
+    requestId: "req-1",
+  };
 }
 
 function errorBody(code: string, message = "failed", requestId = "req-err") {
@@ -320,8 +335,10 @@ describe("limitContent", () => {
 
 describe("FireTrace constructor", () => {
   it("requires an endpoint and an api key", () => {
-    expect(() => new FireTrace({ endpoint: "", apiKey: KEY })).toThrow(FireTraceError);
-    expect(() => new FireTrace({ endpoint: ENDPOINT, apiKey: "" })).toThrowError(
+    expect(() => new FireTrace({ streaming: false, endpoint: "", apiKey: KEY })).toThrow(
+      FireTraceError,
+    );
+    expect(() => new FireTrace({ streaming: false, endpoint: ENDPOINT, apiKey: "" })).toThrowError(
       expect.objectContaining({ code: "config" }),
     );
   });
@@ -335,7 +352,7 @@ describe("FireTrace constructor", () => {
       "https://firetrace.example.com/api/v1/traces/",
     ]) {
       const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
-      const client = new FireTrace({ endpoint, apiKey: KEY, fetch: fn });
+      const client = new FireTrace({ streaming: false, endpoint, apiKey: KEY, fetch: fn });
       await client.record(payload());
       expect(must(calls[0]).url).toBe("https://firetrace.example.com/api/v1/traces");
     }
@@ -346,7 +363,13 @@ describe("FireTrace payload building", () => {
   it("builds a schemaVersion 1 request with nested spans and clock-driven timestamps", async () => {
     const { clock, advance } = fakeClock();
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, clock });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
 
     const trace = client.startTrace("answer-question", {
       id: TRACE_ID,
@@ -457,7 +480,13 @@ describe("FireTrace payload building", () => {
   it("closes open spans when the trace ends and defaults status to unset", async () => {
     const { clock, advance } = fakeClock();
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, clock });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
     const trace = client.startTrace("t");
     const span = trace.startSpan("open");
     advance(40);
@@ -484,7 +513,13 @@ describe("FireTrace payload building", () => {
   it("records errors as attributes without stacks by default", async () => {
     const { clock } = fakeClock();
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, clock });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
     const trace = client.startTrace("t");
     const span = trace.startSpan("tool", { kind: "tool" });
     span.end({ error: new RangeError("tool exploded") });
@@ -502,6 +537,7 @@ describe("FireTrace payload building", () => {
   it("includes error stacks when includeErrorStacks is enabled", async () => {
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -515,6 +551,7 @@ describe("FireTrace payload building", () => {
     const paths: string[][] = [];
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -550,6 +587,7 @@ describe("FireTrace payload building", () => {
   it("truncates oversize content and marks it in metadata and attributes", async () => {
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -573,7 +611,7 @@ describe("FireTrace payload building", () => {
 
   it("caps tags at 20 of 64 characters, spans at 200, and events at 50", async () => {
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    const client = new FireTrace({ streaming: false, endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
     const trace = client.startTrace("t", {
       tags: Array.from({ length: 25 }, (_, i) => `tag-${i}-${"t".repeat(80)}`),
     });
@@ -591,7 +629,13 @@ describe("FireTrace payload building", () => {
   it("reports a second end() of the same trace without sending again", async () => {
     const onError = vi.fn();
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+    });
     const trace = client.startTrace("t");
     expect((await trace.end()).ok).toBe(true);
     const again = await trace.end();
@@ -606,7 +650,7 @@ describe("FireTrace payload building", () => {
 describe("FireTrace transport", () => {
   it("returns the parsed response for a duplicate as well as a new trace", async () => {
     const { fn } = fakeFetch(() => jsonResponse(200, okBody(TRACE_ID, true)));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    const client = new FireTrace({ streaming: false, endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
     const result = await client.record(payload());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -622,7 +666,13 @@ describe("FireTrace transport", () => {
         ? jsonResponse(503, errorBody("internal_error", "try later"))
         : jsonResponse(201, okBody(TRACE_ID)),
     );
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+    });
     const pending = client.record(payload());
     await advanceUntilCalls(calls, 3);
     const result = await pending;
@@ -638,7 +688,13 @@ describe("FireTrace transport", () => {
     const { fn, calls } = fakeFetch(() =>
       jsonResponse(500, errorBody("internal_error", "still broken", "req-500")),
     );
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+    });
     const pending = client.record(payload());
     await advanceUntilCalls(calls, 3);
     const result = await pending;
@@ -664,7 +720,13 @@ describe("FireTrace transport", () => {
         ? jsonResponse(429, errorBody("rate_limited"))
         : jsonResponse(201, okBody(TRACE_ID)),
     );
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, maxRetries: 1 });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      maxRetries: 1,
+    });
     const pending = client.record(payload());
     await advanceUntilCalls(calls, 2);
     expect((await pending).ok).toBe(true);
@@ -676,7 +738,13 @@ describe("FireTrace transport", () => {
     const { fn, calls } = fakeFetch(() =>
       jsonResponse(status, errorBody(`code_${status}`, "nope", "req-x")),
     );
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+    });
     const result = await client.record(payload());
     expect(calls).toHaveLength(1);
     expect(result.ok).toBe(false);
@@ -699,7 +767,7 @@ describe("FireTrace transport", () => {
           headers: { "x-request-id": "hdr-1" },
         }),
     );
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    const client = new FireTrace({ streaming: false, endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
     const result = await client.record(payload());
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -715,7 +783,13 @@ describe("FireTrace transport", () => {
     const { fn, calls } = fakeFetch(() => {
       throw new TypeError("fetch failed");
     });
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, maxRetries: 0 });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      maxRetries: 0,
+    });
     const result = await client.record(payload());
     expect(calls).toHaveLength(1);
     expect(result.ok).toBe(false);
@@ -730,7 +804,13 @@ describe("FireTrace transport", () => {
       throw new Error("hook exploded");
     });
     const { fn } = fakeFetch(() => jsonResponse(401, errorBody("invalid_api_key")));
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+    });
     const result = await client.record(payload());
     expect(result.ok).toBe(false);
     expect(onError).toHaveBeenCalledTimes(1);
@@ -741,6 +821,7 @@ describe("FireTrace transport", () => {
     const onError = vi.fn();
     const { fn } = fakeFetch(() => jsonResponse(413, errorBody("payload_too_large", "too big")));
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -757,7 +838,7 @@ describe("FireTrace transport", () => {
   it("flush() waits for in-flight sends", async () => {
     const gate = deferred<Response>();
     const { fn, calls } = fakeFetch(() => gate.promise);
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    const client = new FireTrace({ streaming: false, endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
 
     await client.flush(); // nothing in flight resolves immediately
 
@@ -781,6 +862,7 @@ describe("FireTrace transport", () => {
     const gate = deferred<Response>();
     const { fn } = fakeFetch(() => gate.promise);
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -797,7 +879,13 @@ describe("FireTrace transport", () => {
     const onError = vi.fn();
     const gate = deferred<Response>();
     const { fn, calls } = fakeFetch(() => gate.promise);
-    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+    });
 
     const send = client.record(payload());
     let closed = false;
@@ -826,6 +914,7 @@ describe("FireTrace transport", () => {
   it("shutdown() with throwOnError makes later sends throw", async () => {
     const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -847,6 +936,7 @@ describe("FireTrace transport", () => {
         }),
     );
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -881,6 +971,7 @@ describe("FireTrace transport", () => {
     });
     vi.spyOn(Math, "random").mockReturnValue(0);
     const client = new FireTrace({
+      streaming: false,
       endpoint: ENDPOINT,
       apiKey: KEY,
       fetch: fn,
@@ -943,5 +1034,223 @@ describe("FireTraceApi.patchMetadata", () => {
       code: "not_found",
       requestId: "req-404",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streaming (the default): the start at once, span batches, the end last
+// ---------------------------------------------------------------------------
+
+/** Answers the three streaming requests by URL; `start` overrides the first. */
+function streamingFetch(overrides: { start?: Response } = {}) {
+  return fakeFetch((call) => {
+    if (call.url.endsWith("/spans")) {
+      const { spans } = call.body as unknown as SpansRequest;
+      return jsonResponse(200, {
+        ok: true,
+        traceId: TRACE_ID,
+        added: spans.length,
+        duplicate: 0,
+        spanCount: spans.length,
+        requestId: "req-spans",
+      });
+    }
+    if (call.url.endsWith("/end")) {
+      return jsonResponse(200, {
+        ok: true,
+        traceId: TRACE_ID,
+        duplicate: false,
+        spanCount: 2,
+        requestId: "req-end",
+      });
+    }
+    return overrides.start ?? jsonResponse(201, { ...okBody(TRACE_ID), running: true });
+  });
+}
+
+const lastSegment = (url: string) => url.split("/").pop();
+
+describe("FireTrace streaming", () => {
+  it("sends the start at once, finished spans as a batch, and the end with the tail", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { clock, advance } = fakeClock();
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, clock });
+
+    const trace = client.startTrace("answer-question", {
+      id: TRACE_ID,
+      provider: "example-provider",
+      model: "example-model",
+      sessionId: "session-123",
+      tags: ["sample"],
+      input: { prompt: "hi" },
+      metadata: { route: "/api/chat" },
+    });
+    await tick();
+    expect(calls).toHaveLength(1);
+    expect(must(calls[0]).url).toBe(`${ENDPOINT}/api/v1/traces`);
+    expect(must(calls[0]).body).toEqual({
+      schemaVersion: 1,
+      trace: {
+        id: TRACE_ID,
+        name: "answer-question",
+        startedAt: at(0),
+        provider: "example-provider",
+        model: "example-model",
+        sessionId: "session-123",
+        tags: ["sample"],
+        input: { prompt: "hi" },
+        metadata: { route: "/api/chat" },
+        usage: {},
+      },
+    });
+
+    advance(10);
+    const root = trace.startSpan("agent", { id: ROOT_ID, kind: "agent" });
+    advance(5);
+    root.end({ status: "ok", output: { done: true } });
+    root.setAttributes({ late: true }); // after end: frozen, never sent
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await tick();
+    expect(calls).toHaveLength(2);
+    expect(must(calls[1]).url).toBe(`${ENDPOINT}/api/v1/traces/${TRACE_ID}/spans`);
+    expect(must(calls[1]).body).toEqual({
+      schemaVersion: 1,
+      spans: [
+        {
+          id: ROOT_ID,
+          parentSpanId: null,
+          name: "agent",
+          kind: "agent",
+          status: "ok",
+          startedAt: at(10),
+          endedAt: at(15),
+          output: { done: true },
+          attributes: {},
+          events: [],
+        },
+      ],
+    });
+
+    advance(5);
+    trace.startSpan("generate-text", { id: CHILD_ID, kind: "llm" });
+    advance(5);
+    const result = await trace.end({
+      status: "ok",
+      output: { text: "done" },
+      metadata: { extra: true },
+      tags: ["chat"],
+      usage: { inputTokens: 1, outputTokens: 2 },
+    });
+    expect(calls).toHaveLength(3);
+    expect(must(calls[2]).url).toBe(`${ENDPOINT}/api/v1/traces/${TRACE_ID}/end`);
+    expect(must(calls[2]).body).toEqual({
+      schemaVersion: 1,
+      endedAt: at(25),
+      status: "ok",
+      provider: "example-provider",
+      model: "example-model",
+      tags: ["sample", "chat"],
+      metadata: { route: "/api/chat", extra: true },
+      usage: { inputTokens: 1, outputTokens: 2 },
+      output: { text: "done" },
+      spans: [
+        {
+          id: CHILD_ID,
+          parentSpanId: null,
+          name: "generate-text",
+          kind: "llm",
+          status: "unset",
+          startedAt: at(20),
+          endedAt: at(25),
+          attributes: {},
+          events: [],
+        },
+      ],
+    });
+    expect(result).toEqual({
+      ok: true,
+      response: {
+        ok: true,
+        traceId: TRACE_ID,
+        duplicate: false,
+        spanCount: 2,
+        requestId: "req-end",
+      },
+    });
+  });
+
+  it("sends a batch as soon as maxBatchSpans spans have finished", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, maxBatchSpans: 2 });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    trace.startSpan("a").end();
+    await tick();
+    expect(calls).toHaveLength(1);
+    trace.startSpan("b").end();
+    await tick();
+    expect(calls).toHaveLength(2);
+    const batch = must(calls[1]).body as unknown as SpansRequest;
+    expect(batch.spans.map((s) => s.name)).toEqual(["a", "b"]);
+    await trace.end();
+    expect(calls).toHaveLength(3);
+    expect((must(calls[2]).body as unknown as EndTraceRequest).spans).toBeUndefined();
+  });
+
+  it("drops span batches and the end once the start was rejected, reporting once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onError = vi.fn();
+    const { fn, calls } = streamingFetch({
+      start: jsonResponse(409, errorBody("trace_id_conflict", "taken", "req-409")),
+    });
+    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, onError });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    trace.startSpan("a").end();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await tick();
+    const result = await trace.end();
+    expect(calls).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatchObject({
+      code: "trace_id_conflict",
+      status: 409,
+      requestId: "req-409",
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("flush() sends waiting spans and leaves the trace running; shutdown() then refuses the end", async () => {
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    trace.startSpan("a").end();
+    await client.flush();
+    expect(calls.map((c) => lastSegment(c.url))).toEqual(["traces", "spans"]);
+    await client.shutdown();
+    expect(calls).toHaveLength(2);
+    const result = await trace.end();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("closed");
+  });
+
+  it("with throwOnError, a background start failure is thrown from end()", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { fn, calls } = streamingFetch({
+      start: jsonResponse(401, errorBody("invalid_api_key")),
+    });
+    const client = new FireTrace({
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      throwOnError: true,
+    });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    await tick();
+    await expect(trace.end()).rejects.toMatchObject({ code: "invalid_api_key" });
+    expect(calls).toHaveLength(1);
   });
 });

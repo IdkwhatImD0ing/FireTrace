@@ -48,6 +48,14 @@ export type SpanKind = (typeof SPAN_KINDS)[number];
 export const STATUSES = ["ok", "error", "unset"] as const;
 export type TraceStatus = (typeof STATUSES)[number];
 
+/**
+ * What a stored trace can carry: the wire statuses plus `running`, which the
+ * server assigns to a trace ingested without `endedAt` and which only the end
+ * request replaces. Clients never send it; filters and readers accept it.
+ */
+export const STORED_STATUSES = [...STATUSES, "running"] as const;
+export type StoredTraceStatus = (typeof STORED_STATUSES)[number];
+
 const isoTimestamp = z
   .string()
   .refine(
@@ -99,12 +107,19 @@ export const spanInputSchema = z.strictObject({
 });
 export type SpanInput = z.infer<typeof spanInputSchema>;
 
+/**
+ * A trace without `endedAt` is *running*: it is stored as it is, spans are
+ * appended with POST /traces/{id}/spans and the run is closed with
+ * POST /traces/{id}/end. `status` is decided at that point, so it stays
+ * optional here (a default would hide whether it was sent) and normalize.ts
+ * rejects it when `endedAt` is absent.
+ */
 export const traceInputSchema = z.strictObject({
   id: hex(32, "trace id"),
   name: z.string().min(1).max(LIMITS.maxNameLength),
-  status: z.enum(STATUSES).default("unset"),
+  status: z.enum(STATUSES).optional(),
   startedAt: isoTimestamp,
-  endedAt: isoTimestamp,
+  endedAt: isoTimestamp.optional(),
   provider: z.string().min(1).max(LIMITS.maxIdentifierLength).optional(),
   model: z.string().min(1).max(LIMITS.maxIdentifierLength).optional(),
   sessionId: z.string().min(1).max(LIMITS.maxIdentifierLength).optional(),
@@ -124,6 +139,37 @@ export const ingestRequestSchema = z.strictObject({
   trace: traceInputSchema,
 });
 export type IngestRequest = z.infer<typeof ingestRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Streaming a trace: POST /api/v1/traces/{traceId}/spans appends finished
+// spans to a running trace; POST /api/v1/traces/{traceId}/end closes it.
+// Spans are immutable once sent, exactly like the whole-trace form.
+
+export const spansRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  spans: z.array(spanInputSchema).min(1).max(LIMITS.maxSpans),
+});
+export type SpansRequest = z.infer<typeof spansRequestSchema>;
+
+/**
+ * Everything a run only knows at the end. `metadata` is shallow-merged into
+ * what the start carried, `tags` are added to it; the other fields replace
+ * the start's values. `spans` lets the last batch ride along with the end.
+ */
+export const endRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  endedAt: isoTimestamp,
+  status: z.enum(STATUSES).optional(),
+  provider: z.string().min(1).max(LIMITS.maxIdentifierLength).optional(),
+  model: z.string().min(1).max(LIMITS.maxIdentifierLength).optional(),
+  output: jsonValueSchema.optional(),
+  usage: usageSchema.optional(),
+  costUsd: z.number().min(0).optional(),
+  metadata: jsonObjectSchema.optional(),
+  tags: z.array(z.string().min(1).max(LIMITS.maxTagLength)).max(LIMITS.maxTags).optional(),
+  spans: z.array(spanInputSchema).max(LIMITS.maxSpans).optional(),
+});
+export type EndRequest = z.infer<typeof endRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // Scores (POST /api/v1/traces/{traceId}/scores): judgements attached after the run.

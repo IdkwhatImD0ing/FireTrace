@@ -60,9 +60,16 @@ export interface TracePayload {
   spans: SpanPayload[];
 }
 
+/**
+ * The first request of a streamed trace: everything known when the run
+ * starts. No `endedAt` (that is what makes the trace *running* on the
+ * server), no `status` (decided at the end) and no spans yet.
+ */
+export type TraceStartPayload = Omit<TracePayload, "endedAt" | "status" | "spans" | "output">;
+
 export interface IngestRequest {
   schemaVersion: 1;
-  trace: TracePayload;
+  trace: TracePayload | TraceStartPayload;
 }
 
 export interface IngestResponse {
@@ -71,6 +78,54 @@ export interface IngestResponse {
   projectId: string;
   spanCount: number;
   duplicate: boolean;
+  /** True when the trace was stored without `endedAt` and waits for its end request. */
+  running: boolean;
+  requestId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming a trace: POST /api/v1/traces/{traceId}/spans and .../end
+
+export interface SpansRequest {
+  schemaVersion: 1;
+  spans: SpanPayload[];
+}
+
+export interface SpansResponse {
+  ok: true;
+  traceId: string;
+  /** Spans written by this request. */
+  added: number;
+  /** Spans already stored with identical content. */
+  duplicate: number;
+  /** Spans on the trace after this request. */
+  spanCount: number;
+  requestId: string;
+}
+
+export interface EndTraceRequest {
+  schemaVersion: 1;
+  endedAt: string;
+  status?: TraceStatus;
+  provider?: string;
+  model?: string;
+  output?: JsonValue;
+  usage?: Usage;
+  costUsd?: number;
+  /** Shallow-merged into the metadata sent at the start. */
+  metadata?: JsonObject;
+  /** Added to the tags sent at the start. */
+  tags?: string[];
+  /** The last finished spans, saving a round trip. */
+  spans?: SpanPayload[];
+}
+
+export interface EndTraceResponse {
+  ok: true;
+  traceId: string;
+  /** True when the trace had already ended with this exact body; nothing written. */
+  duplicate: boolean;
+  spanCount: number;
   requestId: string;
 }
 

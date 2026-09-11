@@ -19,13 +19,14 @@ const TRACE_ID = z
   .regex(/^[0-9a-fA-F]{32}$/, "traceId is 32 hex characters")
   .transform((s) => s.toLowerCase());
 
-const STATUS = z.enum(["ok", "error", "unset"]);
+const STATUS = z.enum(["ok", "error", "unset", "running"]);
 
 const SCORE_NAME = z
   .string()
   .regex(/^[A-Za-z0-9_-]{1,64}$/, "letters, digits, '_' and '-' only, at most 64 characters");
 
-function ms(n: number): string {
+function ms(n: number | null): string {
+  if (n === null) return "running";
   if (n < 1000) return `${n}ms`;
   if (n < 60_000) return `${(n / 1000).toFixed(2)}s`;
   return `${(n / 60_000).toFixed(1)}m`;
@@ -65,7 +66,7 @@ function summarizeLine(t: {
   id: string;
   startedAt: string;
   status: string;
-  durationMs: number;
+  durationMs: number | null;
   name: string;
   model?: string | null;
   environment?: string | null;
@@ -449,7 +450,7 @@ export function createFireTraceMcpServer(
       {
         title: "Record trace",
         description:
-          "Store one complete, immutable trace. `trace` must follow the ingestion schema: id (32 hex), name, status, startedAt/endedAt (ISO-8601), and spans[] each with id (16 hex), parentSpanId, name, kind, status, startedAt, endedAt. Resending an identical trace is a no-op; reusing an id with different content is rejected.",
+          "Store one complete, immutable trace. `trace` must follow the ingestion schema: id (32 hex), name, status, startedAt/endedAt (ISO-8601), and spans[] each with id (16 hex), parentSpanId, name, kind, status, startedAt, endedAt. Resending an identical trace is a no-op; reusing an id with different content is rejected. Omitting endedAt stores a running trace that the REST API's spans/end endpoints complete later.",
         inputSchema: {
           trace: z.record(z.string(), z.unknown()).describe("The trace object (not the envelope)"),
         },

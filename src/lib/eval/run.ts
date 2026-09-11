@@ -104,6 +104,9 @@ export async function runEvaluator(
   options: RunOptions,
 ): Promise<RunOutcome> {
   const { trace, spans } = await loadTrace(db, projectId, traceId);
+  if (trace.status === "running") {
+    return { status: "skipped", runId: null, reason: "trace is still running" };
+  }
   if (!options.force && trace.scores[evaluator.name]?.evaluatorId === evaluator.id) {
     return { status: "skipped", runId: null, reason: "already scored by this evaluator" };
   }

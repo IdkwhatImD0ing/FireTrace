@@ -1,6 +1,11 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { ApiError, rethrowQuotaExhausted } from "./errors";
-import type { NormalizedIngest, NormalizedSpan, NormalizedTrace } from "./normalize";
+import {
+  spanHash,
+  type NormalizedIngest,
+  type NormalizedSpan,
+  type NormalizedTrace,
+} from "./normalize";
 import {
   chooseKey,
   envStatsDocId,
@@ -40,10 +45,13 @@ export function traceDocument(
   estimatedBytes: number,
   stamp: IngestStamp = NO_STAMP,
 ) {
+  const { endedAt, ...rest } = trace;
   return {
-    ...trace,
+    ...rest,
     startedAt: toTimestamp(trace.startedAt),
-    endedAt: toTimestamp(trace.endedAt),
+    // A running trace has no endedAt at all (not null), so it stays out of
+    // the duration-ordered indexes until the end request fills it in.
+    ...(endedAt === undefined ? {} : { endedAt: toTimestamp(endedAt) }),
     bodyHash,
     estimatedBytes,
     environment: stamp.environment,
@@ -58,6 +66,8 @@ export function spanDocument(span: NormalizedSpan) {
     startedAt: toTimestamp(span.startedAt),
     endedAt: toTimestamp(span.endedAt),
     events: span.events.map((e) => ({ ...e, timestamp: toTimestamp(e.timestamp) })),
+    /** Lets a streamed resend of the same span be recognised as a duplicate. */
+    bodyHash: spanHash(span),
   };
 }
 
@@ -82,10 +92,13 @@ const DEFAULT_INGEST_OPTIONS: IngestOptions = {
 };
 
 /**
- * Idempotent, transactional insert of one immutable trace:
+ * Idempotent, transactional insert of one trace:
  *  - absent            -> write trace + spans + project counters (201)
  *  - present, same hash -> no-op, duplicate (200)
  *  - present, differs   -> 409 trace_id_conflict
+ * A trace without `endedAt` is stored as running: it counts towards the
+ * project and trial counters right away, but the dashboard rollups wait for
+ * the end request (stream.ts), which knows the final duration and status.
  */
 export async function ingestTrace(
   db: Firestore,
@@ -96,6 +109,7 @@ export async function ingestTrace(
   const projectRef = db.collection("projects").doc(projectId);
   const traceRef = projectRef.collection("traces").doc(normalized.trace.id);
   const stamp = options.stamp ?? NO_STAMP;
+  const running = normalized.trace.endedAt === undefined;
   // Dashboard rollups for the trace's UTC day (all environments, and the
   // trace's own); read so the per-day key caps hold.
   const day = statsDayId(normalized.trace.startedAt);
@@ -109,8 +123,8 @@ export async function ingestTrace(
       const [projectSnap, traceSnap, daySnap, envDaySnap] = await Promise.all([
         tx.get(projectRef),
         tx.get(traceRef),
-        tx.get(dayRef),
-        tx.get(envDayRef),
+        running ? null : tx.get(dayRef),
+        running ? null : tx.get(envDayRef),
       ]);
       if (!projectSnap.exists) {
         throw new ApiError(
@@ -176,28 +190,30 @@ export async function ingestTrace(
         tx.set(traceRef.collection("spans").doc(span.id), spanDocument(span));
       }
       const t = normalized.trace;
-      const increments = (existing: StatsDayDoc) =>
-        statsIncrements(
-          traceStatsDeltas(
-            {
-              name: t.name,
-              status: t.status,
-              startedAt: t.startedAt,
-              durationMs: t.durationMs,
-              model: t.model ?? null,
-              usage: t.usage,
-              costUsd: t.costUsd ?? null,
-              spanCount: t.spanCount,
-            },
-            {
-              model: chooseKey(existing.byModel, t.model ?? null, STATS_CAPS.models),
-              name: chooseKey(existing.byName, t.name, STATS_CAPS.names),
-            },
-          ),
-          1,
-        );
-      tx.set(dayRef, increments(daySnap.data() ?? {}), { merge: true });
-      tx.set(envDayRef, increments(envDaySnap.data() ?? {}), { merge: true });
+      if (!running) {
+        const increments = (existing: StatsDayDoc) =>
+          statsIncrements(
+            traceStatsDeltas(
+              {
+                name: t.name,
+                status: t.status,
+                startedAt: t.startedAt,
+                durationMs: t.durationMs ?? 0,
+                model: t.model ?? null,
+                usage: t.usage,
+                costUsd: t.costUsd ?? null,
+                spanCount: t.spanCount,
+              },
+              {
+                model: chooseKey(existing.byModel, t.model ?? null, STATS_CAPS.models),
+                name: chooseKey(existing.byName, t.name, STATS_CAPS.names),
+              },
+            ),
+            1,
+          );
+        tx.set(dayRef, increments(daySnap?.data() ?? {}), { merge: true });
+        tx.set(envDayRef, increments(envDaySnap?.data() ?? {}), { merge: true });
+      }
       const incomingStart = toTimestamp(normalized.trace.startedAt);
       const previousLast = projectSnap.get("lastTraceAt");
       const lastTraceAt =

@@ -28,7 +28,7 @@ function traceAt(id: string, startedAt: string, status: "ok" | "error" = "ok") {
   body.trace.id = id;
   body.trace.status = status;
   body.trace.startedAt = move(body.trace.startedAt);
-  body.trace.endedAt = move(body.trace.endedAt);
+  body.trace.endedAt = move(body.trace.endedAt!);
   for (const span of body.trace.spans) {
     span.startedAt = move(span.startedAt);
     span.endedAt = move(span.endedAt);

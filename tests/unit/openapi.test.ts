@@ -33,11 +33,15 @@ describe("openApiDocument", () => {
       "/api/v1/scores",
       "/api/v1/traces",
       "/api/v1/traces/{traceId}",
+      "/api/v1/traces/{traceId}/end",
       "/api/v1/traces/{traceId}/scores",
       "/api/v1/traces/{traceId}/scores/{scoreId}",
+      "/api/v1/traces/{traceId}/spans",
     ]);
     expect(doc.paths["/api/v1/traces"].post.operationId).toBe("recordTrace");
     expect(doc.paths["/api/v1/traces"].get.operationId).toBe("listTraces");
+    expect(doc.paths["/api/v1/traces/{traceId}/spans"].post.operationId).toBe("appendSpans");
+    expect(doc.paths["/api/v1/traces/{traceId}/end"].post.operationId).toBe("endTrace");
     expect(doc.paths["/api/v1/traces/{traceId}"].get.operationId).toBe("getTrace");
     expect(doc.paths["/api/v1/traces/{traceId}"].patch.operationId).toBe("patchTraceMetadata");
     expect(doc.paths["/api/v1/traces/{traceId}"].delete.operationId).toBe("deleteTrace");

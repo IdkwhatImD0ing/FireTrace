@@ -1,8 +1,8 @@
 # Ingestion API reference
 
-This page covers `POST /api/v1/traces` and `PATCH /api/v1/traces/{traceId}` in depth, plus the single-trace read they pair with. The rest of the key-authenticated API (list, delete, project, key, OpenAPI) is documented in [api.md](./api.md) and the MCP server in [mcp.md](./mcp.md).
+This page covers `POST /api/v1/traces`, the streaming pair `POST /api/v1/traces/{traceId}/spans` and `POST /api/v1/traces/{traceId}/end`, and `PATCH /api/v1/traces/{traceId}` in depth, plus the single-trace read they pair with. The rest of the key-authenticated API (list, delete, project, key, OpenAPI) is documented in [api.md](./api.md) and the MCP server in [mcp.md](./mcp.md).
 
-FireTrace accepts completed traces over plain HTTPS so any language can integrate. This document is derived from `src/lib/firetrace/schema.ts` (wire schema and limits), `src/lib/firetrace/normalize.ts` (semantic checks and normalization), `src/lib/firetrace/ingest.ts` (authentication and the idempotent transaction), `src/lib/firetrace/metadata.ts` (the metadata patch and its transaction), and the route handlers under `src/app/api/v1/traces/`. When those files change, this document must change with them.
+FireTrace accepts traces over plain HTTPS so any language can integrate: either one complete trace per request, or [streamed as the run happens](#streaming-a-trace). This document is derived from `src/lib/firetrace/schema.ts` (wire schema and limits), `src/lib/firetrace/normalize.ts` (semantic checks and normalization), `src/lib/firetrace/ingest.ts` (authentication and the idempotent transaction), `src/lib/firetrace/stream.ts` (appending spans and ending a running trace), `src/lib/firetrace/metadata.ts` (the metadata patch and its transaction), and the route handlers under `src/app/api/v1/traces/`. When those files change, this document must change with them.
 
 ## Endpoint
 
@@ -12,7 +12,7 @@ Authorization: Bearer ft_live_<keyId>_<secret>
 Content-Type: application/json
 ```
 
-- One request stores exactly one complete trace with all of its spans. There is no streaming and no batching. Once stored, a trace is immutable apart from its `metadata`, which [`PATCH`](#updating-metadata) can merge into for judgements that only arrive after the run.
+- One request stores one trace. With `endedAt` it is complete, spans included; without `endedAt` it is stored as **running** and completed later by the [streaming requests](#streaming-a-trace). Once a trace has ended it is immutable apart from its `metadata`, which [`PATCH`](#updating-metadata) can merge into for judgements that only arrive after the run.
 - The route runs in the Node.js runtime on the server. It sets `Cache-Control: no-store` and an `X-Request-Id` header on every response and sends no CORS headers; it is intended for server-to-server calls, not browsers.
 - `GET /api/v1/traces` returns `405` with code `invalid_request`.
 
@@ -37,44 +37,44 @@ The trace's **environment** is deliberately not a body field. It comes from the 
 
 ### Trace object
 
-| Field       | Type                                            | Required | Rules                                                                         |
-| ----------- | ----------------------------------------------- | -------- | ----------------------------------------------------------------------------- |
-| `id`        | string                                          | yes      | 32 hexadecimal characters. Uppercase is accepted and normalized to lowercase. |
-| `name`      | string                                          | yes      | 1–500 characters.                                                             |
-| `status`    | `"ok"` \| `"error"` \| `"unset"`                | no       | Default `"unset"`. Not derived from spans.                                    |
-| `startedAt` | string                                          | yes      | ISO 8601 timestamp (see below).                                               |
-| `endedAt`   | string                                          | yes      | ISO 8601 timestamp; must not precede `startedAt`.                             |
-| `provider`  | string                                          | no       | 1–200 characters.                                                             |
-| `model`     | string                                          | no       | 1–200 characters. Filterable in the dashboard.                                |
-| `sessionId` | string                                          | no       | 1–200 characters. Filterable.                                                 |
-| `userId`    | string                                          | no       | 1–200 characters. Filterable.                                                 |
-| `tags`      | string[]                                        | no       | Default `[]`. At most 20 tags, each 1–64 characters.                          |
-| `input`     | any JSON value                                  | no       | Stored verbatim, displayed, never indexed.                                    |
-| `output`    | any JSON value                                  | no       | Stored verbatim, displayed, never indexed.                                    |
-| `metadata`  | JSON object                                     | no       | Default `{}`. Displayed, never indexed.                                       |
-| `usage`     | `{ inputTokens?, outputTokens?, totalTokens? }` | no       | Default `{}`. Each field a non-negative integer. No other keys.               |
-| `costUsd`   | number                                          | no       | Non-negative. Supplied by the caller; FireTrace has no price tables.          |
-| `spans`     | Span[]                                          | no       | Default `[]`. At most 200 spans.                                              |
+| Field       | Type                                            | Required | Rules                                                                                                                 |
+| ----------- | ----------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `id`        | string                                          | yes      | 32 hexadecimal characters. Uppercase is accepted and normalized to lowercase.                                         |
+| `name`      | string                                          | yes      | 1–500 characters.                                                                                                     |
+| `status`    | `"ok"` \| `"error"` \| `"unset"`                | no       | Default `"unset"`. Not derived from spans. Must be omitted when `endedAt` is.                                         |
+| `startedAt` | string                                          | yes      | ISO 8601 timestamp (see below).                                                                                       |
+| `endedAt`   | string                                          | no       | ISO 8601 timestamp; must not precede `startedAt`. Omit it to start a running trace ([streaming](#streaming-a-trace)). |
+| `provider`  | string                                          | no       | 1–200 characters.                                                                                                     |
+| `model`     | string                                          | no       | 1–200 characters. Filterable in the dashboard.                                                                        |
+| `sessionId` | string                                          | no       | 1–200 characters. Filterable.                                                                                         |
+| `userId`    | string                                          | no       | 1–200 characters. Filterable.                                                                                         |
+| `tags`      | string[]                                        | no       | Default `[]`. At most 20 tags, each 1–64 characters.                                                                  |
+| `input`     | any JSON value                                  | no       | Stored verbatim, displayed, never indexed.                                                                            |
+| `output`    | any JSON value                                  | no       | Stored verbatim, displayed, never indexed.                                                                            |
+| `metadata`  | JSON object                                     | no       | Default `{}`. Displayed, never indexed.                                                                               |
+| `usage`     | `{ inputTokens?, outputTokens?, totalTokens? }` | no       | Default `{}`. Each field a non-negative integer. No other keys.                                                       |
+| `costUsd`   | number                                          | no       | Non-negative. Supplied by the caller; FireTrace has no price tables.                                                  |
+| `spans`     | Span[]                                          | no       | Default `[]`. At most 200 spans.                                                                                      |
 
 ### Span object
 
-| Field          | Type                                                                                                          | Required | Rules                                                                                           |
-| -------------- | ------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `id`           | string                                                                                                        | yes      | 16 hexadecimal characters, unique within the trace. Normalized to lowercase.                    |
-| `parentSpanId` | string \| null                                                                                                | no       | Default `null`. Must reference another span in the same trace; a span cannot be its own parent. |
-| `name`         | string                                                                                                        | yes      | 1–500 characters.                                                                               |
-| `kind`         | `"llm"` \| `"agent"` \| `"tool"` \| `"chain"` \| `"retriever"` \| `"embedding"` \| `"reranker"` \| `"custom"` | no       | Default `"custom"`.                                                                             |
-| `status`       | `"ok"` \| `"error"` \| `"unset"`                                                                              | no       | Default `"unset"`. Spans with `"error"` are counted in the trace's `errorCount`.                |
-| `startedAt`    | string                                                                                                        | yes      | ISO 8601 timestamp.                                                                             |
-| `endedAt`      | string                                                                                                        | yes      | ISO 8601 timestamp; must not precede `startedAt`.                                               |
-| `provider`     | string                                                                                                        | no       | 1–200 characters.                                                                               |
-| `model`        | string                                                                                                        | no       | 1–200 characters.                                                                               |
-| `input`        | any JSON value                                                                                                | no       | Stored verbatim.                                                                                |
-| `output`       | any JSON value                                                                                                | no       | Stored verbatim.                                                                                |
-| `attributes`   | JSON object                                                                                                   | no       | Default `{}`. Free-form; see the error convention below.                                        |
-| `events`       | Event[]                                                                                                       | no       | Default `[]`. At most 50 events.                                                                |
-| `usage`        | `{ inputTokens?, outputTokens?, totalTokens? }`                                                               | no       | Non-negative integers.                                                                          |
-| `costUsd`      | number                                                                                                        | no       | Non-negative.                                                                                   |
+| Field          | Type                                                                                                          | Required | Rules                                                                                                                                                                |
+| -------------- | ------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`           | string                                                                                                        | yes      | 16 hexadecimal characters, unique within the trace. Normalized to lowercase.                                                                                         |
+| `parentSpanId` | string \| null                                                                                                | no       | Default `null`. Must reference another span in the same request (a [streamed batch](#spans) may name one that has not arrived yet); a span cannot be its own parent. |
+| `name`         | string                                                                                                        | yes      | 1–500 characters.                                                                                                                                                    |
+| `kind`         | `"llm"` \| `"agent"` \| `"tool"` \| `"chain"` \| `"retriever"` \| `"embedding"` \| `"reranker"` \| `"custom"` | no       | Default `"custom"`.                                                                                                                                                  |
+| `status`       | `"ok"` \| `"error"` \| `"unset"`                                                                              | no       | Default `"unset"`. Spans with `"error"` are counted in the trace's `errorCount`.                                                                                     |
+| `startedAt`    | string                                                                                                        | yes      | ISO 8601 timestamp.                                                                                                                                                  |
+| `endedAt`      | string                                                                                                        | yes      | ISO 8601 timestamp; must not precede `startedAt`.                                                                                                                    |
+| `provider`     | string                                                                                                        | no       | 1–200 characters.                                                                                                                                                    |
+| `model`        | string                                                                                                        | no       | 1–200 characters.                                                                                                                                                    |
+| `input`        | any JSON value                                                                                                | no       | Stored verbatim.                                                                                                                                                     |
+| `output`       | any JSON value                                                                                                | no       | Stored verbatim.                                                                                                                                                     |
+| `attributes`   | JSON object                                                                                                   | no       | Default `{}`. Free-form; see the error convention below.                                                                                                             |
+| `events`       | Event[]                                                                                                       | no       | Default `[]`. At most 50 events.                                                                                                                                     |
+| `usage`        | `{ inputTokens?, outputTokens?, totalTokens? }`                                                               | no       | Non-negative integers.                                                                                                                                               |
+| `costUsd`      | number                                                                                                        | no       | Non-negative.                                                                                                                                                        |
 
 ### Event object
 
@@ -122,11 +122,11 @@ The route performs these steps in order; the first failure determines the respon
 1. Reject if `Content-Length` exceeds 2 MiB (`413`).
 2. Authenticate the bearer key and resolve its project (`401`).
 3. Read the body; reject if it exceeds 2 MiB (`413`) or is not valid JSON (`400 invalid_json`).
-4. Validate against the schema (`400 invalid_trace`), then apply semantic checks: trace and span `endedAt >= startedAt`, unique span ids, no self-parent, parents present, event timestamps parseable, no cycles.
-5. Normalize: lowercase ids, re-serialize timestamps as UTC ISO strings, compute `durationMs` for the trace and each span, compute `spanCount` and `errorCount` (spans with `status: "error"`), drop `undefined` fields, and apply defaults.
+4. Validate against the schema (`400 invalid_trace`), then apply semantic checks: trace (when it has `endedAt`) and span `endedAt >= startedAt`, no `status` without `endedAt`, unique span ids, no self-parent, parents present, event timestamps parseable, no cycles.
+5. Normalize: lowercase ids, re-serialize timestamps as UTC ISO strings, compute `durationMs` for the trace (when it has `endedAt`; otherwise `status` becomes `"running"` and `endedAt`/`durationMs` are absent) and each span, compute `spanCount` and `errorCount` (spans with `status: "error"`), drop `undefined` fields, and apply defaults.
 6. Check the 750 KiB per-document limits and sum the serialized sizes into `estimatedBytes` (`413`).
-7. Compute `bodyHash = SHA-256(canonical JSON of { trace, spans })`, where canonical JSON sorts object keys recursively and has no whitespace (`src/lib/firetrace/hash.ts`).
-8. Run one Firestore transaction (`ingestTrace`): read the project and the trace document, then either write the trace (stamped with the key's `environment` and `keyId`, neither of which is part of the hash), all span documents, the dashboard rollups (one for every environment together, one for the trace's environment), and the project counter deltas (`traceCount`, `spanCount`, `estimatedBytes`, `lastTraceAt`, `updatedAt`), or return a duplicate, or raise a conflict. The transaction is awaited before the response is sent.
+7. Compute `bodyHash = SHA-256(canonical JSON of { trace, spans })`, where canonical JSON sorts object keys recursively and has no whitespace (`src/lib/firetrace/hash.ts`). Every span document also gets its own `bodyHash`, so a streamed resend of a span is recognised.
+8. Run one Firestore transaction (`ingestTrace`): read the project and the trace document, then either write the trace (stamped with the key's `environment` and `keyId`, neither of which is part of the hash), all span documents, the dashboard rollups (one for every environment together, one for the trace's environment; skipped for a running trace, whose end request writes them), and the project counter deltas (`traceCount`, `spanCount`, `estimatedBytes`, `lastTraceAt`, `updatedAt`), or return a duplicate, or raise a conflict. The transaction is awaited before the response is sent.
 
 ### Idempotency
 
@@ -151,11 +151,12 @@ Retrying a request after a timeout is therefore safe. [Patching metadata](#updat
   "projectId": "5eedc0ffee5eedc0ffee5eed",
   "spanCount": 2,
   "duplicate": false,
+  "running": false,
   "requestId": "0f1e2d3c4b5a6978"
 }
 ```
 
-The trace is then visible at `/projects/{projectId}/traces/{traceId}` on the deployment.
+The trace is then visible at `/projects/{projectId}/traces/{traceId}` on the deployment. `running` is `true` when the body had no `endedAt` ([streaming](#streaming-a-trace)).
 
 ### Errors
 
@@ -283,6 +284,79 @@ TRACE_ID=$(openssl rand -hex 16)   # 32 hex characters
 SPAN_ID=$(openssl rand -hex 8)     # 16 hex characters
 ```
 
+## Streaming a trace
+
+A complete trace in one request is the simplest form, but nothing is stored until the run has finished: a process that crashes halfway leaves no trace at all. The streaming form stores the trace when the run starts and adds spans as they finish, so a crash leaves a running trace with everything that happened up to it. Three requests, all under the same key and scope (`traces:write`), all safe to retry:
+
+| Step  | Request                                                                                  | What it does                                                                                              |
+| ----- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Start | `POST /api/v1/traces` with a `trace` that has **no `endedAt`** (and no `status`)         | Stores the trace at once with `status: "running"`. It is listed and can be opened while the run is going. |
+| Spans | `POST /api/v1/traces/{traceId}/spans` with `{ "schemaVersion": 1, "spans": [ ... ] }`    | Appends finished spans. A batch holds 1 to 200 spans.                                                     |
+| End   | `POST /api/v1/traces/{traceId}/end` with `{ "schemaVersion": 1, "endedAt": "...", ... }` | Closes the trace: final status, output and usage, and only now the dashboard rollups.                     |
+
+The whole-trace form is the start and the end in one request; a stored trace looks the same either way, apart from `endHash` on streamed ones. This is how the LangSmith and OpenTelemetry-based tools behave too: the run is visible from its first moment, and every span is sent once, finished, and never changed.
+
+### The start
+
+The body is the [trace object](#trace-object) without `endedAt`. Sending `status` with it is a `400 invalid_trace`: the status is decided at the end. Spans may be included if they have already finished. The response is the usual one with `"running": true`, and the stored document has `status: "running"` and no `endedAt` or `durationMs` until the end arrives (`null` in the read API). The project's trace count and, on trial instances, the account's trace allowance are charged here; the per-day rollups are not touched yet. The same idempotency rule applies: the same start again is a `200` duplicate, a different body under the same id a `409 trace_id_conflict`.
+
+### Spans
+
+Each span in a batch is a complete [span object](#span-object), as immutable as in the whole-trace form. Two checks are relaxed: a span's `parentSpanId` need not name a span that is already stored or in the same batch (children normally finish, and arrive, before their parent), and cycles are not checked (the span tree renders orphans as roots and flattens cycles). Duplicate ids within a batch, a span that is its own parent, and `endedAt` before `startedAt` are still `400`s.
+
+Every stored span carries a `bodyHash` of its normalized content. A span already stored with the same hash counts as a duplicate and is skipped; one stored with **different** content fails the whole batch with `409 span_conflict` and nothing is written, so a retry can never half-apply. A trace holds at most 200 spans in total, counting the start and every batch; a batch that would exceed that is a `400 invalid_trace` naming the limit. Each accepted batch adds to the trace's `spanCount`, `errorCount` and `estimatedBytes` and to the project's counters.
+
+```json
+{
+  "ok": true,
+  "traceId": "42f38ac8295345a7a12c4e3f60d6da23",
+  "added": 2,
+  "duplicate": 1,
+  "spanCount": 7,
+  "requestId": "0f1e2d3c4b5a6978"
+}
+```
+
+### The end
+
+| Field               | Type                             | Required | Effect                                                               |
+| ------------------- | -------------------------------- | -------- | -------------------------------------------------------------------- |
+| `endedAt`           | string                           | yes      | ISO 8601; must not precede the trace's `startedAt` (`400`).          |
+| `status`            | `"ok"` \| `"error"` \| `"unset"` | no       | Default `"unset"`. Replaces `running`.                               |
+| `provider`, `model` | string                           | no       | Replace the start's values.                                          |
+| `output`            | any JSON value                   | no       | Set on the trace.                                                    |
+| `usage`             | usage object                     | no       | Replaces the start's usage.                                          |
+| `costUsd`           | number                           | no       | Set on the trace.                                                    |
+| `metadata`          | JSON object                      | no       | Shallow-merged into the start's metadata (the [PATCH](#rules) rule). |
+| `tags`              | string[]                         | no       | Added to the start's tags, deduplicated, at most 20 in total.        |
+| `spans`             | Span[]                           | no       | A last batch, with the same rules as the spans request.              |
+
+The end computes `durationMs`, the final `spanCount` and `errorCount`, stores `endHash` (the hash of the normalized end body), and writes the day's dashboard rollups, all in one transaction. It is idempotent: the same end body again is `200` with `"duplicate": true` and nothing written; a different body once the trace has ended is `409 trace_finished`, and so is any spans request after the end. `bodyHash` keeps describing the start body, so resending the start after the end is still a duplicate, exactly as after a metadata patch.
+
+```json
+{
+  "ok": true,
+  "traceId": "42f38ac8295345a7a12c4e3f60d6da23",
+  "duplicate": false,
+  "spanCount": 7,
+  "requestId": "0f1e2d3c4b5a6978"
+}
+```
+
+### Errors specific to streaming
+
+| HTTP | `code`              | When                                                                                                                                   |
+| ---- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `invalid_trace`     | `status` without `endedAt` at the start; an empty batch; a batch that would exceed 200 spans; `endedAt` before `startedAt` at the end. |
+| 404  | `not_found`         | No such trace in this key's project, or a malformed trace id.                                                                          |
+| 409  | `trace_finished`    | A spans request, or a different end body, after the trace has ended.                                                                   |
+| 409  | `span_conflict`     | A span id reused with different content; nothing in that batch is written.                                                             |
+| 413  | `payload_too_large` | A span over 750 KiB, an end body over 750 KiB, or a finished trace document that would exceed 750 KiB.                                 |
+
+### What a running trace looks like
+
+`GET /api/v1/traces?status=running` lists traces that have not ended, and `GET /api/v1/traces/{traceId}` returns them with `"status": "running"`, `"endedAt": null` and `"durationMs": null`. The dashboard shows the same: a _running_ badge, no duration, and a waterfall that reaches as far as the spans do. The per-day numbers count a trace only once it has ended. Evaluators skip running traces; scores and metadata patches are accepted. Nothing on the server ever ends a trace on its own: a run that dies without sending the end stays `running`, with every span that arrived, until an owner deletes it. The TypeScript SDK streams by default and ends the trace with `status: "error"` from a `catch` block ([packages/sdk-js](../packages/sdk-js/README.md#streaming)).
+
 ## Updating metadata
 
 A trace is written once and never rewritten — with two exceptions. **Scores** (`POST /api/v1/traces/{traceId}/scores`, see [api.md](./api.md#scores)) are the place for judgements that only exist after the run finished: a reader's thumbs rating, a reviewer's verdict, an overnight eval result. They are typed, indexed, and listable. **Metadata** is the place for free-form facts that arrive late: a business outcome that resolves hours later, a link to the ticket the run produced.
@@ -299,7 +373,7 @@ This needs the `traces:write` scope — the same scope the application already h
 
 ### Rules
 
-- **`metadata` is the only field accepted.** The body is strict: `name`, `status`, `spans`, or anything else is a `400 invalid_request` that names the field. Everything the trace was ingested with stays immutable, spans included.
+- **`metadata` is the only field accepted.** The body is strict: `name`, `status`, `spans`, or anything else is a `400 invalid_request` that names the field. Everything the trace was ingested with stays immutable, spans included. (A running trace is completed by its [end request](#the-end), not by a patch.)
 - **The merge is shallow.** A key in the patch replaces that top-level key outright, nested objects included; keys the patch does not mention are left alone. To change one field inside a nested object, send the whole object.
 - **Last writer wins.** Two patches of different keys both survive. Two patches of the same key resolve to whichever committed last, with no record that the other happened — there is no history and no conflict detection.
 - **`bodyHash` is not recomputed.** It keeps describing the body as ingested, so re-sending the original trace after a patch is still recognised as a duplicate (`200`) instead of a `409 trace_id_conflict`. The corollary: after a patch, `bodyHash` no longer describes what the document currently holds.
@@ -408,7 +482,7 @@ One trace with every span:
 }
 ```
 
-`durationMs`, `spanCount`, `errorCount`, and `environment` are computed at ingestion, not sent by the caller: the first three from the body, the last from the recording key (`null` when the key has none and on every trace recorded before environments existed). Spans come back ordered by `startedAt`, then id. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace belonging to another project. `metadataUpdatedAt` and `environment` were added after the first release and are `null` on older traces; a client validating this response strictly must allow the extra keys.
+`durationMs`, `spanCount`, `errorCount`, and `environment` are computed at ingestion, not sent by the caller: the first three from the body, the last from the recording key (`null` when the key has none and on every trace recorded before environments existed). A [running](#streaming-a-trace) trace comes back with `"status": "running"`, `"endedAt": null` and `"durationMs": null`. Spans come back ordered by `startedAt`, then id. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace belonging to another project. `metadataUpdatedAt` and `environment` were added after the first release and are `null` on older traces; a client validating this response strictly must allow the extra keys.
 
 `GET /api/v1/traces` lists traces newest first with cursor pagination and filters on status, model, name, tag, environment, session id, user id, and a time range; its query string is as strict as this endpoint's body (an unknown parameter or value is a `400`). AI agents can read the same data over MCP ([mcp.md](./mcp.md)). Both are documented in [api.md](./api.md). Recording requires the `traces:write` scope. Owners also read traces in the dashboard and can download one trace with its spans as canonical JSON from the trace page (`GET /api/projects/{projectId}/traces/{traceId}/export`, session-cookie authenticated).
 

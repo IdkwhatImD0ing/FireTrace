@@ -22,6 +22,7 @@ const todayMs = Math.floor(Date.now() / 86_400_000) * 86_400_000 + 3_600_000;
 
 let page: Page;
 let projectId = "";
+let apiKey = "";
 const projectName = uniqueName("trace-page");
 const options = () => page.getByRole("listbox", { name: "Spans" }).getByRole("option");
 
@@ -30,6 +31,7 @@ test.beforeAll(async ({ browser }) => {
   await signInAsOwner(page);
   projectId = await createProject(page, projectName);
   const key = await createApiKey(page, projectId, "seed");
+  apiKey = key.plaintext;
   for (let i = 0; i < COUNT; i++) {
     const body = sampleTraceRequest({
       id: ids[i],
@@ -134,4 +136,30 @@ test("the histogram above the list links each day to a time-range filter", async
   await bar.click();
   await expect(page).toHaveURL(/[?&]from=\d{4}-\d{2}-\d{2}T00:00&to=\d{4}-\d{2}-\d{2}T23:59$/);
   await expect(page.getByRole("link", { name: /^t-\d$/ })).toHaveCount(COUNT);
+});
+
+test("a streamed trace that has not ended shows as running in the list and on its page", async () => {
+  const id = "f".repeat(31) + "0";
+  const body = sampleTraceRequest({
+    id,
+    name: "still-running",
+    startedAt: new Date(todayMs + 10 * 60_000).toISOString(),
+  });
+  delete body.trace.endedAt;
+  delete body.trace.status;
+  body.trace.spans = body.trace.spans.slice(0, 2);
+  const res = await postTrace(page.request, apiKey, body);
+  expect(res.status()).toBe(201);
+  expect(await res.json()).toMatchObject({ running: true, spanCount: 2 });
+
+  await page.goto(`/projects/${projectId}?status=running`);
+  const row = page.getByRole("link", { name: "still-running" });
+  await expect(row).toBeVisible();
+  await expect(page.getByRole("table")).toContainText("running");
+  await expect(page.getByRole("table")).not.toContainText("t-0");
+
+  await page.goto(`/projects/${projectId}/traces/${id}`);
+  await expect(page.getByRole("heading", { name: "still-running", level: 1 })).toBeVisible();
+  await expect(page.getByText("running", { exact: true }).first()).toBeVisible();
+  await expect(options()).toHaveCount(3); // trace row + the two spans that arrived
 });

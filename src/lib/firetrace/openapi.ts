@@ -1,12 +1,15 @@
 import { z } from "zod";
 import {
+  endRequestSchema,
   ingestRequestSchema,
   LIMITS,
   SCORE_DATA_TYPES,
   SCORE_LIMITS,
   SCORE_SOURCES,
   SPAN_KINDS,
+  spansRequestSchema,
   STATUSES,
+  STORED_STATUSES,
 } from "./schema";
 import { KEY_SCOPES, SCOPE_DESCRIPTIONS } from "./scopes";
 
@@ -32,6 +35,8 @@ const errorSchema = {
             "insufficient_scope",
             "not_found",
             "trace_id_conflict",
+            "trace_finished",
+            "span_conflict",
             "conflict",
             "payload_too_large",
             "quota_exhausted",
@@ -71,15 +76,24 @@ const traceSummarySchema = {
   properties: {
     id: { type: "string", pattern: "^[0-9a-f]{32}$" },
     name: { type: "string" },
-    status: { type: "string", enum: [...STATUSES] },
+    status: {
+      type: "string",
+      enum: [...STORED_STATUSES],
+      description:
+        "`running` until the trace's end request arrives (streamed traces); the client-set status afterwards",
+    },
     environment: {
       type: ["string", "null"],
       description:
         "Environment of the API key that recorded the trace, stamped by the server at ingest; null = unassigned (keys without one, and every trace recorded before environments existed)",
     },
     startedAt: { type: "string", format: "date-time" },
-    endedAt: { type: "string", format: "date-time" },
-    durationMs: { type: "integer" },
+    endedAt: {
+      type: ["string", "null"],
+      format: "date-time",
+      description: "Null while the trace is running",
+    },
+    durationMs: { type: ["integer", "null"], description: "Null while the trace is running" },
     provider: { type: ["string", "null"] },
     model: { type: ["string", "null"] },
     sessionId: { type: ["string", "null"] },
@@ -166,24 +180,34 @@ const spanSchema = {
   },
 } as const;
 
-let ingestJsonSchema: Record<string, unknown> | undefined;
-
-/** JSON Schema of the ingest body; derived once, the input schema is a constant. */
-export function ingestRequestJsonSchema(): Record<string, unknown> {
-  if (ingestJsonSchema) return ingestJsonSchema;
+/** JSON Schema of a Zod request body, with a pointer to the docs when Zod cannot express it. */
+function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
   try {
-    ingestJsonSchema = z.toJSONSchema(ingestRequestSchema, {
+    return z.toJSONSchema(schema, {
       io: "input",
       target: "draft-2020-12",
       unrepresentable: "any",
     }) as Record<string, unknown>;
   } catch {
-    ingestJsonSchema = {
-      type: "object",
-      description: "See docs/ingestion-api.md for the full schema.",
-    };
+    return { type: "object", description: "See docs/ingestion-api.md for the full schema." };
   }
-  return ingestJsonSchema;
+}
+
+let ingestJsonSchema: Record<string, unknown> | undefined;
+let spansJsonSchema: Record<string, unknown> | undefined;
+let endJsonSchema: Record<string, unknown> | undefined;
+
+/** JSON Schema of the ingest body; derived once, the input schema is a constant. */
+export function ingestRequestJsonSchema(): Record<string, unknown> {
+  return (ingestJsonSchema ??= jsonSchemaOf(ingestRequestSchema));
+}
+
+function spansRequestJsonSchema(): Record<string, unknown> {
+  return (spansJsonSchema ??= jsonSchemaOf(spansRequestSchema));
+}
+
+function endRequestJsonSchema(): Record<string, unknown> {
+  return (endJsonSchema ??= jsonSchemaOf(endRequestSchema));
 }
 
 const bearer = [{ apiKey: [] }];
@@ -245,6 +269,38 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
       schemas: {
         Error: errorSchema,
         IngestRequest: ingestRequestJsonSchema(),
+        SpansRequest: spansRequestJsonSchema(),
+        SpansResult: {
+          type: "object",
+          required: ["ok", "traceId", "added", "duplicate", "spanCount", "requestId"],
+          properties: {
+            ok: { type: "boolean" },
+            traceId: { type: "string" },
+            added: { type: "integer", description: "Spans written by this request" },
+            duplicate: {
+              type: "integer",
+              description: "Spans already stored with identical content; nothing written for them",
+            },
+            spanCount: { type: "integer", description: "Spans on the trace after this request" },
+            requestId: { type: "string" },
+          },
+        },
+        EndRequest: endRequestJsonSchema(),
+        EndResult: {
+          type: "object",
+          required: ["ok", "traceId", "duplicate", "spanCount", "requestId"],
+          properties: {
+            ok: { type: "boolean" },
+            traceId: { type: "string" },
+            duplicate: {
+              type: "boolean",
+              description:
+                "True when the trace had already ended with this exact body; nothing written",
+            },
+            spanCount: { type: "integer" },
+            requestId: { type: "string" },
+          },
+        },
         MetadataPatch: {
           type: "object",
           required: ["metadata"],
@@ -371,8 +427,8 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
       "/api/v1/traces": {
         post: {
           operationId: "recordTrace",
-          summary: "Record one complete, immutable trace",
-          description: `Requires \`traces:write\`. Idempotent per trace id: an identical resend returns 200 with duplicate=true; a different body for the same id returns 409. Limits: ${LIMITS.maxSpans} spans, ${LIMITS.maxEventsPerSpan} events per span, ${LIMITS.maxTags} tags, ${LIMITS.maxRequestBytes} request bytes, ${LIMITS.maxDocumentBytes} bytes per stored document.`,
+          summary: "Record one trace: complete when endedAt is present, otherwise running",
+          description: `Requires \`traces:write\`. With \`trace.endedAt\` the body is one complete, immutable trace. Without it the trace is stored as \`running\` (send no \`status\`): append finished spans with \`POST /api/v1/traces/{traceId}/spans\` and close it with \`POST /api/v1/traces/{traceId}/end\`. Idempotent per trace id: an identical resend returns 200 with duplicate=true; a different body for the same id returns 409. Limits: ${LIMITS.maxSpans} spans, ${LIMITS.maxEventsPerSpan} events per span, ${LIMITS.maxTags} tags, ${LIMITS.maxRequestBytes} request bytes, ${LIMITS.maxDocumentBytes} bytes per stored document.`,
           requestBody: {
             required: true,
             content: {
@@ -417,7 +473,12 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
           description:
             "Requires `traces:read`. Filters combine with AND. Use `after`/`before` cursors from a previous page; never offsets. `sort=slowest` (by durationMs) and `sort=costliest` (by costUsd; traces without a cost are omitted) combine only with `status`, `model`, `name`, `tag` and `environment`; adding `sessionId`, `userId`, `from` or `to` is a 400. A cursor is only valid under the sort that produced it. The query string is strict: an unknown parameter, or an unknown value for `status`, `sort`, `environment`, `from` or `to`, is a `400 invalid_request` naming it, so a misspelled filter can never come back as unfiltered data.",
           parameters: [
-            { name: "status", in: "query", schema: { type: "string", enum: [...STATUSES] } },
+            {
+              name: "status",
+              in: "query",
+              schema: { type: "string", enum: [...STORED_STATUSES] },
+              description: "`running` selects streamed traces that have not ended yet",
+            },
             { name: "model", in: "query", schema: { type: "string" } },
             {
               name: "name",
@@ -600,6 +661,82 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
       },
+      "/api/v1/traces/{traceId}/spans": {
+        parameters: [traceIdParam],
+        post: {
+          operationId: "appendSpans",
+          summary: "Append finished spans to a running trace",
+          description: `Requires \`traces:write\`. Each span is complete and immutable, exactly as in the whole-trace form; a span whose parent has not arrived yet is fine (children usually finish first). Idempotent per span id: a span already stored with identical content counts as a duplicate, one stored with different content fails the whole batch with 409 \`span_conflict\` and nothing is written. The trace may hold at most ${LIMITS.maxSpans} spans in total.`,
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/SpansRequest" } },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Spans written and/or recognised as duplicates",
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/SpansResult" } },
+              },
+            },
+            "400": {
+              description: "Invalid JSON, a schema violation, or the span limit reached",
+              ...errorRef,
+            },
+            "404": { description: "No such trace in this project", ...errorRef },
+            "409": {
+              description:
+                "The trace has already ended (trace_finished), or a span id is reused with different content (span_conflict)",
+              ...errorRef,
+            },
+            "413": { description: "Request or a span document too large", ...errorRef },
+            "429": { description: "Firestore quota exhausted; nothing written", ...errorRef },
+            ...errorResponses,
+          },
+        },
+      },
+      "/api/v1/traces/{traceId}/end": {
+        parameters: [traceIdParam],
+        post: {
+          operationId: "endTrace",
+          summary: "Close a running trace",
+          description:
+            "Requires `traces:write`. Sets `endedAt`, `status` (default `unset`) and the other end-only fields, merges `metadata` shallowly, adds `tags`, and may carry the last batch of finished spans in `spans`. Only now does the trace count in the dashboard's rollups. Idempotent: the same end body again is a 200 duplicate; a different one after the trace has ended is a 409 `trace_finished`.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/EndRequest" } },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Ended (or an identical duplicate; nothing written)",
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/EndResult" } },
+              },
+            },
+            "400": {
+              description:
+                "Invalid JSON, a schema violation, endedAt before startedAt, or the span limit reached",
+              ...errorRef,
+            },
+            "404": { description: "No such trace in this project", ...errorRef },
+            "409": {
+              description:
+                "The trace already ended with a different body (trace_finished), or a span id is reused with different content (span_conflict)",
+              ...errorRef,
+            },
+            "413": {
+              description:
+                "Request too large, or the finished trace document over the per-document limit",
+              ...errorRef,
+            },
+            "429": { description: "Firestore quota exhausted; nothing written", ...errorRef },
+            ...errorResponses,
+          },
+        },
+      },
       "/api/v1/traces/{traceId}/scores": {
         parameters: [traceIdParam],
         post: {
@@ -778,13 +915,17 @@ export function openApiDocument(baseUrl: string): Record<string, unknown> {
 // Kept separate so the components block above stays readable.
 export const ingestResultSchema = {
   type: "object",
-  required: ["ok", "traceId", "projectId", "spanCount", "duplicate", "requestId"],
+  required: ["ok", "traceId", "projectId", "spanCount", "duplicate", "running", "requestId"],
   properties: {
     ok: { type: "boolean" },
     traceId: { type: "string" },
     projectId: { type: "string" },
     spanCount: { type: "integer" },
     duplicate: { type: "boolean" },
+    running: {
+      type: "boolean",
+      description: "True when the body had no endedAt and the trace waits for its end request",
+    },
     requestId: { type: "string" },
   },
 } as const;

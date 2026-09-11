@@ -123,8 +123,13 @@ export function TraceExplorer({
   }
 
   const t0 = Math.min(Date.parse(trace.startedAt), ...spans.map((s) => Date.parse(s.startedAt)));
-  const t1 = Math.max(Date.parse(trace.endedAt), ...spans.map((s) => Date.parse(s.endedAt)));
+  // A running trace has no end yet: the timeline reaches as far as its spans do.
+  const t1 = Math.max(
+    Date.parse(trace.endedAt ?? trace.startedAt),
+    ...spans.map((s) => Date.parse(s.endedAt)),
+  );
   const total = Math.max(1, t1 - t0);
+  const traceWidthMs = trace.durationMs ?? t1 - Date.parse(trace.startedAt);
   const selectedSpan =
     selection.kind === "span" ? (spans.find((s) => s.id === selection.id) ?? null) : null;
   const kindsPresent = SPAN_KINDS.filter((k) => spans.some((s) => s.kind === k));
@@ -175,7 +180,7 @@ export function TraceExplorer({
           <Fact label="status" value={<StatusBadge status={trace.status} />} mono={false} />
           <Fact label="duration" value={formatDuration(trace.durationMs)} />
           <Fact label="started" value={formatDateTime(trace.startedAt)} />
-          <Fact label="ended" value={formatDateTime(trace.endedAt)} />
+          <Fact label="ended" value={trace.endedAt ? formatDateTime(trace.endedAt) : "running"} />
           <Fact
             label="provider / model"
             value={[trace.provider, trace.model].filter(Boolean).join(" / ") || "—"}
@@ -441,7 +446,7 @@ export function TraceExplorer({
                   className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-line-2"
                   style={{
                     left: `${((Date.parse(trace.startedAt) - t0) / total) * 100}%`,
-                    width: `${Math.max(0.5, (trace.durationMs / total) * 100)}%`,
+                    width: `${Math.max(0.5, (traceWidthMs / total) * 100)}%`,
                   }}
                 />
               </span>

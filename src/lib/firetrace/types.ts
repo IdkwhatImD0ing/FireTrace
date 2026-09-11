@@ -4,6 +4,7 @@ import type {
   ScoreDataType,
   ScoreSource,
   SpanKind,
+  StoredTraceStatus,
   TraceStatus,
   Usage,
 } from "./schema";
@@ -48,12 +49,14 @@ export interface ApiKeySummary {
 export interface TraceSummary {
   id: string;
   name: string;
-  status: TraceStatus;
+  /** `running` until the end request arrives (see docs/ingestion-api.md, "Streaming a trace"). */
+  status: StoredTraceStatus;
   /** Copied from the ingesting key at ingest time; null for unassigned and pre-environment traces. */
   environment: string | null;
   startedAt: string;
-  endedAt: string;
-  durationMs: number;
+  /** Null while the trace is running. */
+  endedAt: string | null;
+  durationMs: number | null;
   provider: string | null;
   model: string | null;
   sessionId: string | null;
@@ -107,7 +110,7 @@ export interface SpanDetail {
 }
 
 export interface TraceFilters {
-  status?: TraceStatus;
+  status?: StoredTraceStatus;
   model?: string;
   sessionId?: string;
   userId?: string;

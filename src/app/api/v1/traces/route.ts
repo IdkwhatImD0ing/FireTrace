@@ -20,7 +20,8 @@ import { log } from "@/lib/log";
 export const runtime = "nodejs";
 
 /**
- * POST /api/v1/traces — store one complete, immutable trace.
+ * POST /api/v1/traces — store one trace: complete and immutable when the body
+ * carries `endedAt`, otherwise running until POST /traces/{id}/end.
  *   Authorization: Bearer ft_live_<keyId>_<secret>   (scope traces:write)
  *   Body: { schemaVersion: 1, trace: {...} }  (see docs/api.md)
  */
@@ -40,6 +41,7 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
     allowedEmails: env.allowedEmails,
     stamp: { environment: auth.environment, keyId: auth.keyId },
   });
+  const running = normalized.value.trace.status === "running";
   log("info", "ingest.stored", {
     requestId,
     projectId: auth.projectId,
@@ -49,6 +51,7 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
     spanCount: normalized.value.spans.length,
     estimatedBytes: normalized.value.estimatedBytes,
     duplicate: outcome.duplicate,
+    running,
     ms: Date.now() - startedAt,
   });
   return jsonResponse(
@@ -58,6 +61,7 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
       projectId: auth.projectId,
       spanCount: normalized.value.spans.length,
       duplicate: outcome.duplicate,
+      running,
       requestId,
     },
     outcome.created ? 201 : 200,

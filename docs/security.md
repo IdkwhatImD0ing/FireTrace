@@ -91,7 +91,7 @@ A FireTrace deployment is a Next.js application (typically on Vercel) plus one F
 
 ### Idempotency and immutability
 
-Traces are immutable apart from `metadata`. A retry with identical content is a no-op, and a different body under an existing trace id is rejected with `409` inside the same transaction that would otherwise write it (`ingestTrace`). Counters are updated in that transaction, so a partial write cannot leave the project statistics inconsistent.
+A trace is immutable once it has ended, apart from `metadata`. A retry with identical content is a no-op, and a different body under an existing trace id is rejected with `409` inside the same transaction that would otherwise write it (`ingestTrace`). Counters are updated in that transaction, so a partial write cannot leave the project statistics inconsistent. A streamed trace (`src/lib/firetrace/stream.ts`) can only grow until its end: spans are appended once and never changed, and the end request is accepted once, both inside transactions that compare stored hashes (`bodyHash` per span, `endHash` for the end), so a retry is a no-op and a conflicting body a `409`. Nothing on the server ends a running trace on its own.
 
 `PATCH /api/v1/traces/{traceId}` (`src/lib/firetrace/metadata.ts`) is the single exception, and a narrow one: a strict body admits `metadata` and nothing else, the merge runs in a transaction that first confirms the trace exists under the key's own project, and the write touches `metadata`, `metadataUpdatedAt`, and `estimatedBytes` only — never a span, an identifier, a timing, or `bodyHash`. It is last-writer-wins with no history, so metadata is not a place for anything that needs an audit trail.
 

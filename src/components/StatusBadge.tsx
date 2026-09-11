@@ -1,12 +1,13 @@
-import type { TraceStatus } from "@/lib/firetrace/schema";
+import type { StoredTraceStatus } from "@/lib/firetrace/schema";
 
-const STYLE: Record<TraceStatus, { color: string; label: string }> = {
+const STYLE: Record<StoredTraceStatus, { color: string; label: string }> = {
   ok: { color: "var(--color-good)", label: "ok" },
   error: { color: "var(--color-crit-2)", label: "error" },
   unset: { color: "var(--color-ink-3)", label: "unset" },
+  running: { color: "var(--color-ink-2)", label: "running" },
 };
 
-function Glyph({ status }: { status: TraceStatus }) {
+function Glyph({ status }: { status: StoredTraceStatus }) {
   if (status === "error") {
     return (
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" className="shrink-0">
@@ -18,6 +19,13 @@ function Glyph({ status }: { status: TraceStatus }) {
     return (
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" className="shrink-0">
         <path d="M2 5h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (status === "running") {
+    return (
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" className="shrink-0">
+        <circle cx="5" cy="5" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
       </svg>
     );
   }
@@ -36,7 +44,7 @@ function Glyph({ status }: { status: TraceStatus }) {
 }
 
 /** Status is always icon + text, never color alone. */
-export function StatusBadge({ status }: { status: TraceStatus }) {
+export function StatusBadge({ status }: { status: StoredTraceStatus }) {
   const s = STYLE[status];
   return (
     <span
@@ -49,7 +57,7 @@ export function StatusBadge({ status }: { status: TraceStatus }) {
   );
 }
 
-export function StatusIcon({ status }: { status: TraceStatus }) {
+export function StatusIcon({ status }: { status: StoredTraceStatus }) {
   const s = STYLE[status];
   return (
     <span

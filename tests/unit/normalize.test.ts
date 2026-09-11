@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { byteLength, normalizeIngestBody } from "@/lib/firetrace/normalize";
+import {
+  byteLength,
+  normalizeEndBody,
+  normalizeIngestBody,
+  normalizeSpansBody,
+  spanHash,
+} from "@/lib/firetrace/normalize";
 import { sampleTraceRequest } from "@/lib/firetrace/sample";
 import { LIMITS, type IngestRequest } from "@/lib/firetrace/schema";
 
@@ -504,5 +510,172 @@ describe("byteLength", () => {
     expect(byteLength([])).toBe(2);
     expect(byteLength({ a: "é" })).toBe(10);
     expect(byteLength({ a: 1, b: [true, null] })).toBe('{"a":1,"b":[true,null]}'.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streaming: a running start, span batches, and the end body
+
+describe("normalizeIngestBody for a running trace", () => {
+  function running(spans: Span[] = []): IngestRequest {
+    const body = minimalTrace(spans);
+    delete body.trace.endedAt;
+    delete body.trace.status;
+    return body;
+  }
+
+  it("stores a trace without endedAt as running, with no endedAt or durationMs", () => {
+    const value = expectValid(running([span(1)]));
+    expect(value.trace.status).toBe("running");
+    expect(value.trace).not.toHaveProperty("endedAt");
+    expect(value.trace).not.toHaveProperty("durationMs");
+    expect(value.trace.spanCount).toBe(1);
+    expect(value.estimatedBytes).toBe(byteLength(value.trace) + byteLength(value.spans[0]));
+  });
+
+  it("rejects a status on a trace that has no endedAt", () => {
+    const body = running();
+    body.trace.status = "ok";
+    expectInvalid(body, /status is decided by the end request/);
+  });
+
+  it("hashes the running form differently from the finished one", () => {
+    expect(expectValid(running()).bodyHash).not.toBe(expectValid(minimalTrace()).bodyHash);
+  });
+});
+
+describe("normalizeSpansBody", () => {
+  const ok = (spans: unknown[]) => {
+    const result = normalizeSpansBody({ schemaVersion: 1, spans }, TRACE_ID);
+    if (!result.ok) throw new Error(`expected a valid batch, got: ${result.error.message}`);
+    return result.value;
+  };
+  const bad = (body: unknown) => {
+    const result = normalizeSpansBody(body, TRACE_ID);
+    if (result.ok) throw new Error("expected an invalid batch");
+    return result.error;
+  };
+
+  it("accepts a span whose parent is not in the batch and stamps the trace id", () => {
+    const value = ok([span(2, "00000000000000ff")]);
+    expect(value.spans).toHaveLength(1);
+    expect(value.spans[0]).toMatchObject({
+      id: "0000000000000002",
+      traceId: TRACE_ID,
+      parentSpanId: "00000000000000ff",
+      durationMs: 10,
+    });
+  });
+
+  it("keeps the per-span rules: unique ids, no self-parent, endedAt after startedAt", () => {
+    expect(bad({ schemaVersion: 1, spans: [span(1), span(1)] }).message).toMatch(
+      /duplicate span id/,
+    );
+    expect(bad({ schemaVersion: 1, spans: [span(1, "0000000000000001")] }).message).toMatch(
+      /own parent/,
+    );
+    expect(bad({ schemaVersion: 1, spans: [span(1, null, { endedAt: at(-1) })] }).message).toMatch(
+      /endedAt cannot precede/,
+    );
+  });
+
+  it("rejects an empty batch, unknown fields and too many spans", () => {
+    expect(bad({ schemaVersion: 1, spans: [] }).code).toBe("invalid_trace");
+    expect(bad({ schemaVersion: 1, spans: [span(1)], extra: 1 }).code).toBe("invalid_trace");
+    const tooMany = Array.from({ length: LIMITS.maxSpans + 1 }, (_, i) => span(i + 1));
+    expect(bad({ schemaVersion: 1, spans: tooMany }).code).toBe("invalid_trace");
+  });
+
+  it("returns payload_too_large for an oversize span", () => {
+    const huge = span(1, null, { input: "x".repeat(LIMITS.maxDocumentBytes) });
+    expect(bad({ schemaVersion: 1, spans: [huge] }).code).toBe("payload_too_large");
+  });
+});
+
+describe("normalizeEndBody", () => {
+  const ok = (body: unknown) => {
+    const result = normalizeEndBody(body, TRACE_ID);
+    if (!result.ok) throw new Error(`expected a valid end body, got: ${result.error.message}`);
+    return result.value;
+  };
+  const bad = (body: unknown) => {
+    const result = normalizeEndBody(body, TRACE_ID);
+    if (result.ok) throw new Error("expected an invalid end body");
+    return result.error;
+  };
+
+  it("normalizes a minimal end body: UTC timestamp, status unset, no spans", () => {
+    const value = ok({ schemaVersion: 1, endedAt: "2026-09-02T21:01:03.5+02:00" });
+    expect(value).toEqual({
+      endedAt: "2026-09-02T19:01:03.500Z",
+      status: "unset",
+      spans: [],
+      endHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+  });
+
+  it("hashes independently of key order and carries the end-only fields and inline spans", () => {
+    const a = ok({
+      schemaVersion: 1,
+      endedAt: at(10),
+      status: "error",
+      output: { text: "x" },
+      metadata: { k: 1 },
+      tags: ["t"],
+      usage: { totalTokens: 3 },
+      costUsd: 0.5,
+      model: "m",
+      spans: [span(1)],
+    });
+    const b = ok({
+      spans: [span(1)],
+      model: "m",
+      costUsd: 0.5,
+      usage: { totalTokens: 3 },
+      tags: ["t"],
+      metadata: { k: 1 },
+      output: { text: "x" },
+      status: "error",
+      endedAt: at(10),
+      schemaVersion: 1,
+    });
+    expect(a.endHash).toBe(b.endHash);
+    expect(a).toMatchObject({
+      status: "error",
+      output: { text: "x" },
+      metadata: { k: 1 },
+      tags: ["t"],
+      usage: { totalTokens: 3 },
+      costUsd: 0.5,
+      model: "m",
+    });
+    expect(a.spans[0]).toMatchObject({ id: "0000000000000001", traceId: TRACE_ID });
+    expect(ok({ schemaVersion: 1, endedAt: at(11) }).endHash).not.toBe(
+      ok({ schemaVersion: 1, endedAt: at(10) }).endHash,
+    );
+  });
+
+  it("rejects unknown fields, a running status and an oversize output", () => {
+    expect(bad({ schemaVersion: 1, endedAt: at(10), name: "x" }).code).toBe("invalid_trace");
+    expect(bad({ schemaVersion: 1, endedAt: at(10), status: "running" }).code).toBe(
+      "invalid_trace",
+    );
+    const huge = { schemaVersion: 1, endedAt: at(10), output: "x".repeat(LIMITS.maxDocumentBytes) };
+    expect(bad(huge).code).toBe("payload_too_large");
+  });
+});
+
+describe("spanHash", () => {
+  it("ignores attribute key order and changes with content", () => {
+    const first = (attributes: Record<string, number>) => {
+      const result = normalizeSpansBody(
+        { schemaVersion: 1, spans: [span(1, null, { attributes })] },
+        TRACE_ID,
+      );
+      if (!result.ok) throw new Error(result.error.message);
+      return spanHash(result.value.spans[0]);
+    };
+    expect(first({ a: 1, b: 2 })).toBe(first({ b: 2, a: 1 }));
+    expect(first({ a: 1, b: 2 })).not.toBe(first({ a: 1, b: 3 }));
   });
 });

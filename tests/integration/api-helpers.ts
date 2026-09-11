@@ -4,11 +4,13 @@ import { POST as mcpPost } from "@/app/api/mcp/route";
 import { GET as keyGet } from "@/app/api/v1/key/route";
 import { GET as projectGet } from "@/app/api/v1/project/route";
 import { GET as scoresGet } from "@/app/api/v1/scores/route";
+import { POST as traceEndPost } from "@/app/api/v1/traces/[traceId]/end/route";
 import {
   DELETE as traceDelete,
   GET as traceGet,
   PATCH as tracePatch,
 } from "@/app/api/v1/traces/[traceId]/route";
+import { POST as traceSpansPost } from "@/app/api/v1/traces/[traceId]/spans/route";
 import { DELETE as scoreDelete } from "@/app/api/v1/traces/[traceId]/scores/[scoreId]/route";
 import {
   GET as traceScoresGet,
@@ -49,10 +51,16 @@ export async function callApi<T = Record<string, unknown>>(call: ApiCall): Promi
   const url = new URL(request.url);
   let response: Response;
   const traceMatch = /^\/api\/v1\/traces\/([^/]+)$/.exec(url.pathname);
+  const traceSpansMatch = /^\/api\/v1\/traces\/([^/]+)\/spans$/.exec(url.pathname);
+  const traceEndMatch = /^\/api\/v1\/traces\/([^/]+)\/end$/.exec(url.pathname);
   const traceScoresMatch = /^\/api\/v1\/traces\/([^/]+)\/scores$/.exec(url.pathname);
   const scoreMatch = /^\/api\/v1\/traces\/([^/]+)\/scores\/([^/]+)$/.exec(url.pathname);
   const params = (values: Record<string, string>) => ({ params: Promise.resolve(values) });
   if (url.pathname === "/api/v1/traces" && method === "POST") response = await tracesPost(request);
+  else if (traceSpansMatch && method === "POST")
+    response = await traceSpansPost(request, params({ traceId: traceSpansMatch[1] }));
+  else if (traceEndMatch && method === "POST")
+    response = await traceEndPost(request, params({ traceId: traceEndMatch[1] }));
   else if (traceScoresMatch && method === "POST")
     response = await traceScoresPost(request, params({ traceId: traceScoresMatch[1] }));
   else if (traceScoresMatch && method === "GET")

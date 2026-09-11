@@ -252,12 +252,13 @@ export async function deleteTrace(
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
-    // Give the day's rollups back; a day that was never rolled up (pre-dashboard trace) is left alone.
+    // Give the day's rollups back; a day that was never rolled up (pre-dashboard
+    // trace) is left alone, and a running trace was never rolled up at all.
     const giveBack = (
       ref: FirebaseFirestore.DocumentReference | null,
       snap: FirebaseFirestore.DocumentSnapshot | null,
     ) => {
-      if (!ref || !startedAt || !snap?.exists) return;
+      if (!ref || !startedAt || !snap?.exists || d.endedAt === undefined) return;
       const day = (snap.data() ?? {}) as StatsDayDoc;
       const model = typeof d.model === "string" ? d.model : null;
       const name = typeof d.name === "string" ? d.name : "";

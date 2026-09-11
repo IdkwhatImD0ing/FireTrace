@@ -1,6 +1,6 @@
 # @firetrace/sdk
 
-A small Node.js client for recording completed LLM and agent traces to a self-deployed [FireTrace](../../README.md) instance. It builds the wire payload for `POST /api/v1/traces`, sends it once the trace ends, retries transient failures, and never throws into your application unless you ask it to.
+A small Node.js client for recording LLM and agent traces to a self-deployed [FireTrace](../../README.md) instance. By default it [streams](#streaming) each trace as it happens: the start when `startTrace()` is called, finished spans in small batches, and the end from `trace.end()`, so a crash halfway through a run still leaves the trace with every span that finished. With `streaming: false` it builds one payload for `POST /api/v1/traces` and sends it once the trace ends. Either way it retries transient failures and never throws into your application unless you ask it to.
 
 - Node.js 22 or newer; ESM only (`"type": "module"`). Uses `node:crypto`, `node:perf_hooks`, and the global `fetch`, so it does not run in browsers or Edge runtimes.
 - No runtime dependencies.
@@ -86,7 +86,7 @@ try {
 await client.shutdown();
 ```
 
-`trace.end()` closes any spans that are still open, builds the payload, and sends it. It returns a `SendResult`: `{ ok: true, response }` with the server's `{ ok, traceId, projectId, spanCount, duplicate, requestId }`, or `{ ok: false, error }` with a `FireTraceError`. Calling `end()` twice on the same trace reports an `already_ended` error.
+`trace.end()` closes any spans that are still open and sends the end request (or, with `streaming: false`, the whole trace). It returns a `SendResult`: `{ ok: true, response }` with the server's end response `{ ok, traceId, duplicate, spanCount, requestId }` (the ingest response `{ ok, traceId, projectId, spanCount, duplicate, running, requestId }` when not streaming), or `{ ok: false, error }` with a `FireTraceError`. Calling `end()` twice on the same trace reports an `already_ended` error.
 
 ## Options
 
@@ -105,25 +105,55 @@ await client.shutdown();
 | `onError`            | `(error: FireTraceError) => void`      | none                           | Receives every failure when `throwOnError` is false. Exceptions thrown by the hook are swallowed.                                              |
 | `fetch`              | `typeof fetch`                         | `globalThis.fetch`             | Custom fetch for tests or proxies.                                                                                                             |
 | `clock`              | `{ now(): number; wall(): Date }`      | `performance.now` / `new Date` | Injectable clocks for deterministic tests.                                                                                                     |
+| `streaming`          | `boolean`                              | `true`                         | Send the trace as it happens ([below](#streaming)). `false` keeps it in memory and sends one complete trace from `trace.end()`.                |
+| `flushIntervalMs`    | `number`                               | `1000`                         | Streaming: how long a finished span waits for company before its batch is sent.                                                                |
+| `maxBatchSpans`      | `number`                               | `50`                           | Streaming: a batch is sent as soon as this many spans are waiting.                                                                             |
 
 ### Trace and span methods
 
-| Method                             | Notes                                                                                                                                              |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.startTrace(name, opts)`    | `opts`: `id`, `status`, `provider`, `model`, `sessionId`, `userId`, `tags`, `input`, `metadata`. Generates a 32-hex trace id when `id` is omitted. |
-| `trace.startSpan(name, opts)`      | Root span. `opts`: `id`, `kind` (default `"custom"`), `provider`, `model`, `input`, `attributes`.                                                  |
-| `span.startSpan(name, opts)`       | Child span with `parentSpanId` set to the parent.                                                                                                  |
-| `span.addEvent(name, attributes?)` | Timestamped event; silently ignored after 50 events on that span.                                                                                  |
-| `span.setAttributes(attributes)`   | Merge attributes.                                                                                                                                  |
-| `span.end(opts)`                   | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `attributes`. Idempotent; the first call fixes `endedAt`.                                 |
-| `trace.setMetadata(metadata)`      | Merge metadata.                                                                                                                                    |
-| `trace.toPayload()`                | Build the wire payload without sending (for inspection or manual `client.record()`).                                                               |
-| `trace.end(opts)`                  | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `metadata`, `tags`. Ends open spans and sends.                                            |
-| `client.record(payload)`           | Send a hand-built `TracePayload` (`{ schemaVersion: 1, trace }` is added).                                                                         |
-| `client.flush()`                   | Resolve once all in-flight sends have settled.                                                                                                     |
-| `client.shutdown()`                | `flush()`, then refuse further sends (they report a `closed` error).                                                                               |
+| Method                             | Notes                                                                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `client.startTrace(name, opts)`    | `opts`: `id`, `status`, `provider`, `model`, `sessionId`, `userId`, `tags`, `input`, `metadata`. Generates a 32-hex trace id when `id` is omitted. When streaming, sends the start request right away. |
+| `trace.startSpan(name, opts)`      | Root span. `opts`: `id`, `kind` (default `"custom"`), `provider`, `model`, `input`, `attributes`.                                                                                                      |
+| `span.startSpan(name, opts)`       | Child span with `parentSpanId` set to the parent.                                                                                                                                                      |
+| `span.addEvent(name, attributes?)` | Timestamped event; silently ignored after 50 events on that span.                                                                                                                                      |
+| `span.setAttributes(attributes)`   | Merge attributes.                                                                                                                                                                                      |
+| `span.end(opts)`                   | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `attributes`. Idempotent; the first call fixes `endedAt`. When streaming, freezes the span and queues it for the next batch.                  |
+| `trace.setMetadata(metadata)`      | Merge metadata (sent with the end when streaming).                                                                                                                                                     |
+| `trace.toPayload()`                | Build the whole-trace wire payload without sending (for inspection or manual `client.record()`).                                                                                                       |
+| `trace.end(opts)`                  | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `metadata`, `tags`. Ends open spans and sends the end (streaming) or the whole trace.                                                         |
+| `client.record(payload)`           | Send a hand-built `TracePayload` (`{ schemaVersion: 1, trace }` is added).                                                                                                                             |
+| `client.flush()`                   | Send every waiting span batch, then resolve once all in-flight sends have settled. Running traces stay running.                                                                                        |
+| `client.shutdown()`                | `flush()`, then refuse further sends (they report a `closed` error).                                                                                                                                   |
 
 Exported helpers: `generateTraceId()`, `generateSpanId()`, `serializeError(error, includeStack?)`, `toJsonValue(value)`, `applyRedaction(value, redact)`, `limitContent(value, maxBytes)`, and the `FireTraceError` class with `status`, `code`, `requestId`, and `retryable` properties.
+
+## Streaming
+
+With the default `streaming: true`, one trace becomes three kinds of request, in this order, all idempotent on the server:
+
+1. **Start**, sent by `client.startTrace()`: the trace's name, input, tags, metadata and identifiers, without `endedAt`. FireTrace stores it with `status: "running"`, and it shows in the dashboard from that moment.
+2. **Spans**, `POST /api/v1/traces/{id}/spans`: every `span.end()` freezes that span's payload and queues it; the queue is sent after `flushIntervalMs` (1 s) or as soon as `maxBatchSpans` (50) are waiting. Later `setAttributes()`/`addEvent()` calls on an ended span are ignored, because a span is sent once and never changed. A span whose parent has not ended yet is fine.
+3. **End**, `POST /api/v1/traces/{id}/end`, sent by `trace.end()`: the final status, output, usage, cost, metadata and tags, plus whatever spans are still waiting. Only now does the trace count in the dashboard's per-day numbers.
+
+Requests for one trace never overlap or reorder: they run through one queue per trace. If the start is rejected (an invalid key, a trace id already taken), the error is reported once through `onError` (or thrown from `end()` with `throwOnError`), later batches are dropped, and `end()` returns that error.
+
+This is what makes crashes visible. Wrap the run so the trace ends with the error, and everything up to the failure is already stored:
+
+```ts
+const trace = client.startTrace("agent-run", { input });
+try {
+  const result = await runAgent(trace);
+  await trace.end({ status: "ok", output: result });
+} catch (error) {
+  await trace.end({ status: "error", error });
+  throw error;
+}
+```
+
+A process that dies without reaching either `end()` leaves the trace `running` on the server, with every span that had finished; nothing closes it automatically. To cover that case as well, end open traces from a `process.on("uncaughtException")` / `"unhandledRejection"` handler (or your framework's equivalent) before exiting. A span that was still open at a hard kill is lost, as with any OpenTelemetry-style client.
+
+Before a process exits, `await client.flush()` (send waiting batches) or `await client.shutdown()`; a batch waiting on its timer does not keep the process alive. A trace that is never ended stays referenced by the client until it is, so long-running processes should end every trace they start.
 
 ## Timing
 
@@ -159,7 +189,7 @@ A send makes up to `1 + maxRetries` attempts (three by default).
 
 When every attempt fails, the result depends on `throwOnError`: `false` (default) calls `onError` and returns `{ ok: false, error }`; `true` throws the `FireTraceError`. `error.code` is the server's error code (`invalid_api_key`, `trace_id_conflict`, `payload_too_large`, `quota_exhausted`, ...), `http_<status>` when the body could not be parsed, or one of the SDK's own codes: `config`, `closed`, `already_ended`, `timeout`, `network`, `unknown`. `error.requestId` carries the server's request id when available.
 
-`trace.end()` returns a promise that settles when the send (including retries) has finished. If you choose not to await it, call `client.flush()` or `client.shutdown()` before the process exits, or the trace may be lost.
+`trace.end()` returns a promise that settles when the end request (and, when streaming, every span batch queued before it) has finished, retries included. If you choose not to await it, call `client.flush()` or `client.shutdown()` before the process exits, or the end and any waiting spans may be lost. When streaming, a failed span batch is reported the same way but does not stop the trace: later batches and the end are still sent.
 
 ## curl fallback
 

@@ -11,11 +11,11 @@ Everything a program can do against a FireTrace deployment goes through the key-
 
 Keys are created per project under **Project → Settings → API keys**. Only an HMAC digest of the secret is stored, so the plaintext is shown once. Each key carries the scopes you choose at creation:
 
-| Scope           | Grants                                                                                                                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `traces:write`  | `POST /api/v1/traces`, `PATCH /api/v1/traces/{id}`, `POST /api/v1/traces/{id}/scores`; MCP `record_trace`, `add_score`, `get_ingest_schema`    |
-| `traces:read`   | `GET /api/v1/traces`, `GET /api/v1/traces/{id}`, `GET /api/v1/traces/{id}/scores`, `GET /api/v1/scores`, `GET /api/v1/project`; MCP read tools |
-| `traces:delete` | `DELETE /api/v1/traces/{id}`, `DELETE /api/v1/traces/{id}/scores/{scoreId}`; MCP `delete_trace`                                                |
+| Scope           | Grants                                                                                                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `traces:write`  | `POST /api/v1/traces`, `POST /api/v1/traces/{id}/spans`, `POST /api/v1/traces/{id}/end`, `PATCH /api/v1/traces/{id}`, `POST /api/v1/traces/{id}/scores`; MCP `record_trace`, `add_score`, `get_ingest_schema` |
+| `traces:read`   | `GET /api/v1/traces`, `GET /api/v1/traces/{id}`, `GET /api/v1/traces/{id}/scores`, `GET /api/v1/scores`, `GET /api/v1/project`; MCP read tools                                                                |
+| `traces:delete` | `DELETE /api/v1/traces/{id}`, `DELETE /api/v1/traces/{id}/scores/{scoreId}`; MCP `delete_trace`                                                                                                               |
 
 `GET /api/v1/key` needs no scope. Defaults for a new key are `traces:write` + `traces:read`; an SDK embedded in an application usually only needs `traces:write`. Keys created before scopes existed behave as `traces:write` only.
 
@@ -101,20 +101,46 @@ The key's project with counters and the storage estimate (FireTrace's own serial
 
 ### `POST /api/v1/traces` — scope `traces:write`
 
-Record one complete, immutable trace. The body is `{ "schemaVersion": 1, "trace": { ... } }`; the full field reference lives in [ingestion-api.md](./ingestion-api.md) and the JSON Schema in the OpenAPI document (`components.schemas.IngestRequest`).
+Record one trace. With `trace.endedAt` the body is one complete, immutable trace; without it the trace is stored as **running** and completed by the two requests below ([streaming](./ingestion-api.md#streaming-a-trace)). The body is `{ "schemaVersion": 1, "trace": { ... } }`; the full field reference lives in [ingestion-api.md](./ingestion-api.md) and the JSON Schema in the OpenAPI document (`components.schemas.IngestRequest`).
 
-| Status | Meaning                                                                            |
-| ------ | ---------------------------------------------------------------------------------- |
-| 201    | Stored. Body: `{ ok, traceId, projectId, spanCount, duplicate: false, requestId }` |
-| 200    | Identical resend of an existing trace; nothing written (`duplicate: true`)         |
-| 400    | `invalid_json` or `invalid_trace` (message names the field)                        |
-| 409    | `trace_id_conflict`: the id exists with different content                          |
-| 413    | `payload_too_large`: request over 2 MiB or a document over Firestore's limit       |
-| 429    | `quota_exhausted`: Firestore refused the write; retry later, nothing was stored    |
+| Status | Meaning                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------- |
+| 201    | Stored. Body: `{ ok, traceId, projectId, spanCount, duplicate: false, running, requestId }` |
+| 200    | Identical resend of an existing trace; nothing written (`duplicate: true`)                  |
+| 400    | `invalid_json` or `invalid_trace` (message names the field; `status` without `endedAt`)     |
+| 409    | `trace_id_conflict`: the id exists with different content                                   |
+| 413    | `payload_too_large`: request over 2 MiB or a document over Firestore's limit                |
+| 429    | `quota_exhausted`: Firestore refused the write; retry later, nothing was stored             |
 
 Idempotency comes from the trace id: the SDK generates 32-hex ids, and a resend with the same body hash is a no-op.
 
-On instances that enable trial mode (`FIRETRACE_TRIAL_TRACE_LIMIT`), a trial account's project answers `403 trial_limit_reached` once the account has recorded its allotted traces; the message links to the deployment guide. Owner projects are never limited.
+On instances that enable trial mode (`FIRETRACE_TRIAL_TRACE_LIMIT`), a trial account's project answers `403 trial_limit_reached` once the account has recorded its allotted traces; the message links to the deployment guide. Owner projects are never limited. A streamed trace is charged at the start.
+
+### `POST /api/v1/traces/{traceId}/spans` — scope `traces:write`
+
+Append finished spans to a running trace. Body: `{ "schemaVersion": 1, "spans": [ ... ] }` with 1–200 [span objects](./ingestion-api.md#span-object); a trace holds at most 200 spans in total. A span's parent need not have arrived yet. Idempotent per span id: a span already stored with identical content counts as a duplicate, one stored with different content is a `409 span_conflict` and nothing in the batch is written. Rules and examples in [ingestion-api.md](./ingestion-api.md#spans).
+
+| Status | Meaning                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| 200    | Body: `{ ok, traceId, added, duplicate, spanCount, requestId }`                                         |
+| 400    | `invalid_json`, or `invalid_trace` (empty batch, schema violation, the 200-span limit)                  |
+| 404    | `not_found`: no such trace in this key's project                                                        |
+| 409    | `trace_finished` (the trace has already ended) or `span_conflict` (a span id reused with other content) |
+| 413    | `payload_too_large`: request over 2 MiB or a span over 750 KiB                                          |
+| 429    | `quota_exhausted`: nothing was stored                                                                   |
+
+### `POST /api/v1/traces/{traceId}/end` — scope `traces:write`
+
+Close a running trace. Body: `{ "schemaVersion": 1, "endedAt", "status"?, "provider"?, "model"?, "output"?, "usage"?, "costUsd"?, "metadata"?, "tags"?, "spans"? }`. `metadata` is shallow-merged into the start's, `tags` are added to it, `spans` is a last batch, and everything else replaces the start's value. Only now does the trace count in the dashboard's rollups. Idempotent: the same end body again is a `200` with `duplicate: true`; a different one after the trace has ended is a `409 trace_finished`. Details in [ingestion-api.md](./ingestion-api.md#the-end).
+
+| Status | Meaning                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------- |
+| 200    | Body: `{ ok, traceId, duplicate, spanCount, requestId }`                                            |
+| 400    | `invalid_json`, or `invalid_trace` (schema violation, `endedAt` before `startedAt`, the span limit) |
+| 404    | `not_found`: no such trace in this key's project                                                    |
+| 409    | `trace_finished` (ended with a different body) or `span_conflict`                                   |
+| 413    | `payload_too_large`: request over 2 MiB, or the finished trace document over 750 KiB                |
+| 429    | `quota_exhausted`: nothing was stored                                                               |
 
 ### `GET /api/v1/traces` — scope `traces:read`
 
@@ -122,7 +148,7 @@ Newest-first list with cursor pagination. Filters combine with AND.
 
 | Query         | Notes                                                                                      |
 | ------------- | ------------------------------------------------------------------------------------------ |
-| `status`      | `ok`, `error`, or `unset`                                                                  |
+| `status`      | `ok`, `error`, `unset`, or `running` (a streamed trace that has not ended)                 |
 | `model`       | exact model string                                                                         |
 | `name`        | exact trace name                                                                           |
 | `tag`         | one tag the trace must carry                                                               |
@@ -136,7 +162,7 @@ Newest-first list with cursor pagination. Filters combine with AND.
 | `after`       | `nextCursor` of a previous page (older traces)                                             |
 | `before`      | `prevCursor` of a previous page (newer traces)                                             |
 
-`slowest` and `costliest` combine only with `status`, `model`, `name`, `tag` and `environment`; adding `sessionId`, `userId`, `from` or `to` to them is a `400 invalid_request`, because Firestore has no index for that combination. `environment` composes with every sort and filter, so "costliest production traces" is `?environment=production&sort=costliest`. `costliest` omits traces that were recorded without `costUsd`. A cursor is only valid under the sort that produced it. Omitting `environment` returns every environment, as before; filtering by an environment no key has ever used is a `200` with an empty list.
+`slowest` and `costliest` combine only with `status`, `model`, `name`, `tag` and `environment`; adding `sessionId`, `userId`, `from` or `to` to them is a `400 invalid_request`, because Firestore has no index for that combination. `environment` composes with every sort and filter, so "costliest production traces" is `?environment=production&sort=costliest`. `costliest` omits traces that were recorded without `costUsd`, and `slowest` omits running traces, which have no `durationMs` yet. A cursor is only valid under the sort that produced it. Omitting `environment` returns every environment, as before; filtering by an environment no key has ever used is a `200` with an empty list.
 
 The query string is **strict**, like the ingest body: an unknown parameter (`?env=production`, `?Status=error`) or an unknown value for `status`, `sort`, `environment`, `from` or `to` is a `400 invalid_request` whose message names the offender. A misspelled filter can therefore never come back as a complete, unfiltered list.
 
@@ -178,11 +204,11 @@ The query string is **strict**, like the ingest body: an unknown parameter (`?en
 }
 ```
 
-Cursors are opaque; an unparseable cursor is `400 invalid_request`. Offsets are never supported because Firestore charges per document read.
+Cursors are opaque; an unparseable cursor is `400 invalid_request`. Offsets are never supported because Firestore charges per document read. A running trace has `"status": "running"` with `endedAt` and `durationMs` both `null`.
 
 ### `GET /api/v1/traces/{traceId}` — scope `traces:read`
 
-One trace with all of its spans, ordered by `startedAt` then id, and all of its scores, newest first. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace that belongs to another project.
+One trace with all of its spans, ordered by `startedAt` then id, and all of its scores, newest first. Trace ids are matched case-insensitively; anything that is not 32 hex characters is a `404 not_found`, as is a trace that belongs to another project. A running trace comes back with `"status": "running"` and `null` for `endedAt` and `durationMs`, with whatever spans have arrived so far.
 
 ```json
 {
