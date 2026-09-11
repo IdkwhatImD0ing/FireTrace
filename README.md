@@ -310,6 +310,8 @@ Create a project in the dashboard, open **Settings**, create an API key, and cop
 
 ### TypeScript SDK
 
+Install it with `npm install @firetrace/sdk` (Node.js 22 or newer), then record a trace:
+
 ```ts
 import { FireTrace } from "@firetrace/sdk";
 
