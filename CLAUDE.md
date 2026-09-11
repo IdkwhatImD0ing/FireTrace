@@ -63,6 +63,7 @@ Always look for and use the appropriate **Firebase agent skills** to perform tas
 
 ## Commands
 
+- Commands you give the user to run must fit their OS and shell, so check first (the session's environment info, or `$PSVersionTable.PSVersion` on Windows). Windows PowerShell 5.1 has no `&&` or `||`: give one command per line (or `A; if ($?) { B }`), and set env vars with `$env:NAME = "value"; cmd` instead of `NAME=value cmd`. The examples below use Bash syntax.
 - `pnpm install`, then `pnpm typegen` once after cloning or adding routes (otherwise `tsc` fails on generated types).
 - `pnpm dev` — http://localhost:3000. Needs `.env.local` (copy `.env.example`; for local work set `FIRETRACE_USE_EMULATORS=true`, `NEXT_PUBLIC_FIRETRACE_USE_EMULATORS=true`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-firetrace`).
 - `pnpm emulators` — Auth 9099 + Firestore 8080 for project `demo-firetrace` (needs Java). `FIRETRACE_USE_EMULATORS=true pnpm seed:emulator` seeds an owner, a project, a key and sample traces. `FIRETRACE_ENDPOINT=... FIRETRACE_API_KEY=... pnpm trace:example` sends a nested trace via the SDK.
