@@ -2,7 +2,7 @@
 
 A small Node.js client for recording LLM and agent traces to a self-deployed [FireTrace](../../README.md) instance. By default it [streams](#streaming) each trace as it happens: the start when `startTrace()` is called, finished spans in small batches, and the end from `trace.end()`, so a crash halfway through a run still leaves the trace with every span that finished. With `streaming: false` it builds one payload for `POST /api/v1/traces` and sends it once the trace ends. Either way it retries transient failures and never throws into your application unless you ask it to.
 
-- Node.js 22 or newer; ESM only (`"type": "module"`). Uses `node:crypto`, `node:perf_hooks`, and the global `fetch`, so it does not run in browsers or Edge runtimes.
+- Node.js 22 or newer. Ships as ESM (`"type": "module"`); CommonJS code (including `tsx` scripts in a project without `"type": "module"`) can `require()` it on Node.js 22.12 or newer. Uses `node:crypto`, `node:perf_hooks`, and the global `fetch`, so it does not run in browsers or Edge runtimes.
 - No runtime dependencies.
 - Types mirror the server schema in `src/lib/firetrace/schema.ts` (`packages/sdk-js/src/types.ts`).
 
