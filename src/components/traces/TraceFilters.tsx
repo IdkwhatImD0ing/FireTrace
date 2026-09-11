@@ -75,7 +75,8 @@ export function TraceFilters({
           <span className="mono-label block">Status</span>
           <select name="status" defaultValue={filters.status ?? ""} className="input mt-1.5">
             <option value="">any</option>
-            {STORED_STATUSES.map((s) => (
+            {/* Running traces have no duration or cost yet, so they cannot be sorted by either. */}
+            {STORED_STATUSES.filter((s) => sort === "newest" || s !== "running").map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>

@@ -102,7 +102,7 @@ STEPS
    Then ask me to open https://<hostname>/login, sign in with OWNER_EMAIL through Google, create a project, open its Settings, and create an API key. I will keep the key myself. For the end-to-end check, ask me to run in my own terminal (do not ask me to paste the key into chat):
      bash/zsh:  FIRETRACE_ENDPOINT=https://<hostname> FIRETRACE_API_KEY=ft_live_... pnpm trace:example
      PowerShell: $env:FIRETRACE_ENDPOINT="https://<hostname>"; $env:FIRETRACE_API_KEY="ft_live_..."; pnpm trace:example
-   The first run prints `Stored trace <id> (3 spans) in project <projectId>` and a `View it:` URL; a second run prints `Duplicate of existing trace ...` (the API answered 200 with duplicate: true) and stores nothing new. Confirm with me that the trace page shows the tree, the waterfall, and the inspector.
+   The run prints `Stored trace <id> (3 spans)` and a `View it` line pointing at the project's trace list; the SDK streams the trace (a start, a span batch and an end), so each run records a new trace. Confirm with me that the trace page shows the tree, the waterfall, and the inspector.
 
 12. Optional extras, only if I want them.
    - Auto-deploys from git: if the clone is my own fork pushed to GitHub, run `vercel git connect` so pushes to main deploy production.

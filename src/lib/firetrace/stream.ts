@@ -30,6 +30,7 @@ import {
   traceStatsDeltas,
   type StatsDayDoc,
 } from "./stats-rollup";
+import { effectivePlan } from "./trial";
 
 /**
  * The streaming half of ingestion. A trace posted without `endedAt`
@@ -39,7 +40,28 @@ import {
  * duplicate rather than a conflict. Only the end request writes the
  * dashboard rollups, because only it knows the final duration and status.
  * Nothing here ever closes a trace on the server's own initiative.
+ *
+ * Two rules keep the rest of the model honest:
+ *  - only a key in the trace's own environment may add to it or end it, so a
+ *    preview key still cannot write production's numbers;
+ *  - a trial trace may not grow past one whole-trace request, so the
+ *    documented `limit × 2 MiB` per trial account still holds.
+ *
+ * Per-batch writes touch the trace document only; the project's span and
+ * byte counters catch up at the end (or on delete) from the trace's
+ * `unsettledSpans`/`unsettledBytes`, so many running traces never contend on
+ * the one project document.
  */
+
+export interface StreamCaller {
+  /** The key's environment; null = unassigned. Must equal the trace's. */
+  environment: string | null;
+  /** DASHBOARD_ALLOWED_EMAILS, which decides whether the project is still a trial one. */
+  allowedEmails: readonly string[];
+}
+
+/** The most a trial trace may hold in total: the size of one whole-trace request. */
+export const TRIAL_TRACE_BYTES = LIMITS.maxRequestBytes;
 
 export interface AppendOutcome {
   added: number;
@@ -78,26 +100,55 @@ function finished(traceId: string): ApiError {
   );
 }
 
+/** What appendSpans needs of a trace document that may hold 750 KiB of content. */
+const APPEND_FIELDS = ["endedAt", "spanCount", "estimatedBytes", "environment"];
+
+interface TraceRead {
+  trace: DocumentSnapshot;
+  spanSnaps: DocumentSnapshot[];
+  trial: boolean;
+}
+
 /** Reads shared by both requests; every read happens here, before any write. */
 async function readTrace(
   tx: Transaction,
   projectRef: DocumentReference,
   traceRef: DocumentReference,
   spans: NormalizedSpan[],
-): Promise<{ trace: DocumentSnapshot; spanSnaps: DocumentSnapshot[] }> {
+  caller: StreamCaller,
+  traceFields?: string[],
+): Promise<TraceRead> {
   const spansRef = traceRef.collection("spans");
-  const [projectSnap, trace, spanSnaps] = await Promise.all([
+  const spanRefs = spans.map((s) => spansRef.doc(s.id));
+  const [projectSnap, traceSnaps, spanSnaps] = await Promise.all([
     tx.get(projectRef),
-    tx.get(traceRef),
-    spans.length
-      ? tx.getAll(...spans.map((s) => spansRef.doc(s.id)), { fieldMask: ["bodyHash"] })
+    tx.getAll(traceRef, ...(traceFields ? [{ fieldMask: traceFields }] : [])),
+    spanRefs.length
+      ? tx.getAll(...spanRefs, { fieldMask: ["bodyHash"] })
       : Promise.resolve([] as DocumentSnapshot[]),
   ]);
+  const [trace] = traceSnaps;
   if (!projectSnap.exists) {
     throw new ApiError(401, "invalid_api_key", "The project for this API key no longer exists.");
   }
-  if (!trace.exists) throw notFound();
-  return { trace, spanSnaps };
+  if (!trace?.exists) throw notFound();
+  if (environmentFromDocument(trace.get("environment")) !== caller.environment) {
+    throw new ApiError(
+      403,
+      "forbidden",
+      "This key belongs to a different environment than the trace. Only a key in the trace's environment can add spans to it or end it.",
+    );
+  }
+  const ownerEmail =
+    typeof projectSnap.get("ownerEmail") === "string"
+      ? (projectSnap.get("ownerEmail") as string)
+      : null;
+  const trial =
+    effectivePlan(
+      { plan: projectSnap.get("plan") === "trial" ? "trial" : "owner", ownerEmail },
+      caller.allowedEmails,
+    ) === "trial";
+  return { trace, spanSnaps, trial };
 }
 
 /**
@@ -139,20 +190,31 @@ function requireSpanRoom(stored: number, fresh: number): void {
   }
 }
 
-/** Queue the span documents; the caller folds the deltas into its single trace and project updates. */
-function stageSpans(
-  tx: Transaction,
-  traceRef: DocumentReference,
-  fresh: NormalizedSpan[],
-): { bytes: number; errors: number } {
+function requireTrialRoom(trial: boolean, stored: number, added: number): void {
+  if (trial && stored + added > TRIAL_TRACE_BYTES) {
+    throw new ApiError(
+      403,
+      "trial_limit_reached",
+      `A trial trace may hold at most ${TRIAL_TRACE_BYTES} bytes in total, the size of one whole-trace request. End this trace or start a new one.`,
+    );
+  }
+}
+
+/** Serialized size and error count of the spans about to be written. */
+function spanTotals(fresh: NormalizedSpan[]): { bytes: number; errors: number } {
   let bytes = 0;
   let errors = 0;
   for (const span of fresh) {
-    tx.set(traceRef.collection("spans").doc(span.id), spanDocument(span));
     bytes += byteLength(span);
     if (span.status === "error") errors++;
   }
   return { bytes, errors };
+}
+
+function stageSpans(tx: Transaction, traceRef: DocumentReference, fresh: NormalizedSpan[]): void {
+  for (const span of fresh) {
+    tx.set(traceRef.collection("spans").doc(span.id), spanDocument(span));
+  }
 }
 
 /** Append finished spans to a running trace. Idempotent per span. */
@@ -161,27 +223,34 @@ export async function appendSpans(
   projectId: string,
   traceId: string,
   batch: NormalizedSpanBatch,
+  caller: StreamCaller,
 ): Promise<AppendOutcome> {
   const projectRef = db.collection("projects").doc(projectId);
   const traceRef = projectRef.collection("traces").doc(traceId);
   try {
     return await db.runTransaction(async (tx) => {
-      const { trace, spanSnaps } = await readTrace(tx, projectRef, traceRef, batch.spans);
+      const { trace, spanSnaps, trial } = await readTrace(
+        tx,
+        projectRef,
+        traceRef,
+        batch.spans,
+        caller,
+        APPEND_FIELDS,
+      );
       if (trace.get("endedAt") !== undefined) throw finished(traceId);
       const { fresh, duplicate } = classifySpans(traceId, batch.spans, spanSnaps);
       const stored = counter(trace.get("spanCount"));
       requireSpanRoom(stored, fresh.length);
       if (fresh.length > 0) {
-        const staged = stageSpans(tx, traceRef, fresh);
+        const totals = spanTotals(fresh);
+        requireTrialRoom(trial, counter(trace.get("estimatedBytes")), totals.bytes);
+        stageSpans(tx, traceRef, fresh);
         tx.update(traceRef, {
           spanCount: FieldValue.increment(fresh.length),
-          errorCount: FieldValue.increment(staged.errors),
-          estimatedBytes: FieldValue.increment(staged.bytes),
-        });
-        tx.update(projectRef, {
-          spanCount: FieldValue.increment(fresh.length),
-          estimatedBytes: FieldValue.increment(staged.bytes),
-          updatedAt: FieldValue.serverTimestamp(),
+          errorCount: FieldValue.increment(totals.errors),
+          estimatedBytes: FieldValue.increment(totals.bytes),
+          unsettledSpans: FieldValue.increment(fresh.length),
+          unsettledBytes: FieldValue.increment(totals.bytes),
         });
       }
       return { added: fresh.length, duplicate, spanCount: stored + fresh.length };
@@ -206,20 +275,28 @@ function byteDelta(before: DocumentData, after: Record<string, unknown>): number
 
 /**
  * Close a running trace: fill in the end-only fields, absorb the last span
- * batch, and roll the finished trace into the day's dashboard stats.
- * A repeat of the same end body is a duplicate; a different one is a 409.
+ * batch, settle the project's counters, and roll the finished trace into the
+ * day's dashboard stats. A repeat of the same end body is a duplicate; a
+ * different one is a 409.
  */
 export async function endTrace(
   db: Firestore,
   projectId: string,
   traceId: string,
   end: NormalizedEnd,
+  caller: StreamCaller,
 ): Promise<EndOutcome> {
   const projectRef = db.collection("projects").doc(projectId);
   const traceRef = projectRef.collection("traces").doc(traceId);
   try {
     return await db.runTransaction(async (tx) => {
-      const { trace, spanSnaps } = await readTrace(tx, projectRef, traceRef, end.spans);
+      const { trace, spanSnaps, trial } = await readTrace(
+        tx,
+        projectRef,
+        traceRef,
+        end.spans,
+        caller,
+      );
       const d = trace.data() ?? {};
       if (d.endedAt !== undefined) {
         if (d.endHash === end.endHash) {
@@ -238,6 +315,7 @@ export async function endTrace(
       const { fresh } = classifySpans(traceId, end.spans, spanSnaps);
       const stored = counter(d.spanCount);
       requireSpanRoom(stored, fresh.length);
+      const totals = spanTotals(fresh);
 
       // The day's rollups, read after the trace so the day is known; still
       // before any write.
@@ -249,9 +327,8 @@ export async function endTrace(
         .doc(envStatsDocId(environment, day));
       const [daySnap, envDaySnap] = await Promise.all([tx.get(dayRef), tx.get(envDayRef)]);
 
-      const staged = stageSpans(tx, traceRef, fresh);
       const spanCount = stored + fresh.length;
-      const errorCount = counter(d.errorCount) + staged.errors;
+      const errorCount = counter(d.errorCount) + totals.errors;
       const model = end.model ?? (typeof d.model === "string" ? d.model : null);
       const usage = end.usage ?? (d.usage && typeof d.usage === "object" ? d.usage : {});
       const costUsd = end.costUsd ?? (typeof d.costUsd === "number" ? d.costUsd : null);
@@ -285,16 +362,21 @@ export async function endTrace(
           `The finished trace document would be about ${bytes} bytes; the limit is ${LIMITS.maxDocumentBytes} bytes. Send less output or metadata.`,
         );
       }
-      const delta = byteDelta(d, changes) + staged.bytes;
+      const delta = byteDelta(d, changes) + totals.bytes;
+      requireTrialRoom(trial, counter(d.estimatedBytes), delta);
 
+      stageSpans(tx, traceRef, fresh);
       tx.update(traceRef, {
         ...changes,
         endedAt: Timestamp.fromDate(new Date(end.endedAt)),
         estimatedBytes: FieldValue.increment(delta),
+        unsettledSpans: FieldValue.delete(),
+        unsettledBytes: FieldValue.delete(),
       });
+      // Everything the batches added since the start, plus this request.
       tx.update(projectRef, {
-        spanCount: FieldValue.increment(fresh.length),
-        estimatedBytes: FieldValue.increment(delta),
+        spanCount: FieldValue.increment(counter(d.unsettledSpans) + fresh.length),
+        estimatedBytes: FieldValue.increment(counter(d.unsettledBytes) + delta),
         updatedAt: FieldValue.serverTimestamp(),
       });
       const increments = (existing: StatsDayDoc) =>

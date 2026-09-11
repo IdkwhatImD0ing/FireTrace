@@ -236,6 +236,13 @@ export async function previewEvaluator(
   options: Pick<RunOptions, "fetchImpl" | "retryDelayMs" | "timeoutMs"> = {},
 ): Promise<PreviewOutcome> {
   const { trace, spans } = await loadTrace(db, projectId, traceId);
+  if (trace.status === "running") {
+    throw new ApiError(
+      409,
+      "conflict",
+      "This trace is still running; preview the evaluator on it once it has ended.",
+    );
+  }
   const call = await askJudge(cfg, draft, trace, spans, options);
   return {
     rendered: call.rendered,

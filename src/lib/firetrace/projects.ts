@@ -212,22 +212,19 @@ export async function deleteTrace(
   const traceSnap = await traceRef.get();
   if (!traceSnap.exists) throw new ApiError(404, "not_found", "Trace not found.");
 
-  await deleteQueryInBatches(db, traceRef.collection("spans"));
-  // Score bytes are counted on the trace, so the transaction below gives them back too.
-  await deleteScoresForTrace(
-    db,
-    projectId,
-    traceId,
-    environmentFromDocument(traceSnap.get("environment")),
-  );
-  await deleteQueryInBatches(db, projectRef.collection("evalRuns").where("traceId", "==", traceId));
-
+  // The trace document goes first, so a span batch or end request racing
+  // this delete finds no trace (404) instead of writing under a parent that
+  // is about to vanish. The sweeps below then see a frozen set.
   await db.runTransaction(async (tx) => {
     const [projectSnap, current] = await Promise.all([tx.get(projectRef), tx.get(traceRef)]);
     if (!current.exists) return; // deleted concurrently; counters already adjusted
     const d = current.data() ?? {};
-    const spanCount = typeof d.spanCount === "number" ? d.spanCount : 0;
-    const bytes = typeof d.estimatedBytes === "number" ? d.estimatedBytes : 0;
+    // A running trace's batches were never settled into the project (stream.ts).
+    const unsettled = (key: string) => (typeof d[key] === "number" ? (d[key] as number) : 0);
+    const spanCount =
+      (typeof d.spanCount === "number" ? d.spanCount : 0) - unsettled("unsettledSpans");
+    const bytes =
+      (typeof d.estimatedBytes === "number" ? d.estimatedBytes : 0) - unsettled("unsettledBytes");
     const startedAt = d.startedAt instanceof Timestamp ? d.startedAt.toDate().toISOString() : null;
     const dayRef = startedAt
       ? projectRef.collection(STATS_COLLECTION).doc(statsDayId(startedAt))
@@ -286,6 +283,16 @@ export async function deleteTrace(
     giveBack(dayRef, daySnap);
     giveBack(envDayRef, envDaySnap);
   });
+
+  await deleteQueryInBatches(db, traceRef.collection("spans"));
+  // Score bytes were counted on the trace, so the transaction above gave them back too.
+  await deleteScoresForTrace(
+    db,
+    projectId,
+    traceId,
+    environmentFromDocument(traceSnap.get("environment")),
+  );
+  await deleteQueryInBatches(db, projectRef.collection("evalRuns").where("traceId", "==", traceId));
 }
 
 /**

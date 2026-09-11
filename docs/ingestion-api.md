@@ -294,17 +294,19 @@ A complete trace in one request is the simplest form, but nothing is stored unti
 | Spans | `POST /api/v1/traces/{traceId}/spans` with `{ "schemaVersion": 1, "spans": [ ... ] }`    | Appends finished spans. A batch holds 1 to 200 spans.                                                     |
 | End   | `POST /api/v1/traces/{traceId}/end` with `{ "schemaVersion": 1, "endedAt": "...", ... }` | Closes the trace: final status, output and usage, and only now the dashboard rollups.                     |
 
-The whole-trace form is the start and the end in one request; a stored trace looks the same either way, apart from `endHash` on streamed ones. This is how the LangSmith and OpenTelemetry-based tools behave too: the run is visible from its first moment, and every span is sent once, finished, and never changed.
+The whole-trace form is the start and the end in one request; a stored trace looks the same either way, apart from `endHash` on streamed ones and `bodyHash`, which for a streamed trace hashes the start body only (so resending the start is the duplicate, not a later whole-trace body). This is how the LangSmith and OpenTelemetry-based tools behave too: the run is visible from its first moment, and every span is sent once, finished, and never changed.
+
+Only a key in the trace's own [environment](./api.md#environments) can add spans to it or end it; any other key's spans or end request is a `403 forbidden`, so a preview key still cannot write production's numbers. Keys without an environment share the unassigned one. A rotated key keeps its environment, so a rotation mid-run is fine.
 
 ### The start
 
-The body is the [trace object](#trace-object) without `endedAt`. Sending `status` with it is a `400 invalid_trace`: the status is decided at the end. Spans may be included if they have already finished. The response is the usual one with `"running": true`, and the stored document has `status: "running"` and no `endedAt` or `durationMs` until the end arrives (`null` in the read API). The project's trace count and, on trial instances, the account's trace allowance are charged here; the per-day rollups are not touched yet. The same idempotency rule applies: the same start again is a `200` duplicate, a different body under the same id a `409 trace_id_conflict`.
+The body is the [trace object](#trace-object) without `endedAt`. Sending `status` with it is a `400 invalid_trace`: the status is decided at the end. Spans may be included if they have already finished. The response is the usual one with `"running": true` (on a duplicate, `running` and `spanCount` describe the stored trace, which may have ended since), and the stored document has `status: "running"` and no `endedAt` or `durationMs` until the end arrives (`null` in the read API). The project's trace count and, on trial instances, the account's trace allowance are charged here; the per-day rollups are not touched yet. The same idempotency rule applies: the same start again is a `200` duplicate, a different body under the same id a `409 trace_id_conflict`.
 
 ### Spans
 
 Each span in a batch is a complete [span object](#span-object), as immutable as in the whole-trace form. Two checks are relaxed: a span's `parentSpanId` need not name a span that is already stored or in the same batch (children normally finish, and arrive, before their parent), and cycles are not checked (the span tree renders orphans as roots and flattens cycles). Duplicate ids within a batch, a span that is its own parent, and `endedAt` before `startedAt` are still `400`s.
 
-Every stored span carries a `bodyHash` of its normalized content. A span already stored with the same hash counts as a duplicate and is skipped; one stored with **different** content fails the whole batch with `409 span_conflict` and nothing is written, so a retry can never half-apply. A trace holds at most 200 spans in total, counting the start and every batch; a batch that would exceed that is a `400 invalid_trace` naming the limit. Each accepted batch adds to the trace's `spanCount`, `errorCount` and `estimatedBytes` and to the project's counters.
+Every stored span carries a `bodyHash` of its normalized content. A span already stored with the same hash counts as a duplicate and is skipped; one stored with **different** content fails the whole batch with `409 span_conflict` and nothing is written, so a retry can never half-apply. A trace holds at most 200 spans in total, counting the start and every batch; a batch that would exceed that is a `400 invalid_trace` naming the limit. Each accepted batch adds to the trace's `spanCount`, `errorCount` and `estimatedBytes`; the project's span and byte counters catch up when the trace ends (or is deleted), so many running traces never contend on the one project document. On trial instances a streamed trace may not grow past 2 MiB in total, the size of one whole-trace request (`403 trial_limit_reached`), which keeps the per-account allowance at `limit × 2 MiB`.
 
 ```json
 {
@@ -345,13 +347,15 @@ The end computes `durationMs`, the final `spanCount` and `errorCount`, stores `e
 
 ### Errors specific to streaming
 
-| HTTP | `code`              | When                                                                                                                                   |
-| ---- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| 400  | `invalid_trace`     | `status` without `endedAt` at the start; an empty batch; a batch that would exceed 200 spans; `endedAt` before `startedAt` at the end. |
-| 404  | `not_found`         | No such trace in this key's project, or a malformed trace id.                                                                          |
-| 409  | `trace_finished`    | A spans request, or a different end body, after the trace has ended.                                                                   |
-| 409  | `span_conflict`     | A span id reused with different content; nothing in that batch is written.                                                             |
-| 413  | `payload_too_large` | A span over 750 KiB, an end body over 750 KiB, or a finished trace document that would exceed 750 KiB.                                 |
+| HTTP | `code`                | When                                                                                                                                   |
+| ---- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `invalid_trace`       | `status` without `endedAt` at the start; an empty batch; a batch that would exceed 200 spans; `endedAt` before `startedAt` at the end. |
+| 403  | `forbidden`           | The key's environment is not the trace's: only keys in the trace's environment can add to it or end it.                                |
+| 403  | `trial_limit_reached` | On trial instances, a batch or end that would take the trace past 2 MiB in total.                                                      |
+| 404  | `not_found`           | No such trace in this key's project, or a malformed trace id.                                                                          |
+| 409  | `trace_finished`      | A spans request, or a different end body, after the trace has ended.                                                                   |
+| 409  | `span_conflict`       | A span id reused with different content; nothing in that batch is written.                                                             |
+| 413  | `payload_too_large`   | A span over 750 KiB, an end body over 750 KiB, or a finished trace document that would exceed 750 KiB.                                 |
 
 ### What a running trace looks like
 

@@ -1254,3 +1254,120 @@ describe("FireTrace streaming", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("FireTrace streaming failures and limits", () => {
+  const spansOk = () =>
+    jsonResponse(200, {
+      ok: true,
+      traceId: TRACE_ID,
+      added: 1,
+      duplicate: 0,
+      spanCount: 1,
+      requestId: "req-spans",
+    });
+  const endOk = () =>
+    jsonResponse(200, {
+      ok: true,
+      traceId: TRACE_ID,
+      duplicate: false,
+      spanCount: 1,
+      requestId: "req-end",
+    });
+
+  it("reports a lost span batch through onError and still sends the end, even with throwOnError", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onError = vi.fn();
+    const { fn, calls } = fakeFetch((call) => {
+      if (call.url.endsWith("/spans")) {
+        return jsonResponse(409, errorBody("span_conflict", "taken", "req-409"));
+      }
+      if (call.url.endsWith("/end")) return endOk();
+      return jsonResponse(201, { ...okBody(TRACE_ID), running: true });
+    });
+    const client = new FireTrace({
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+      throwOnError: true,
+    });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    trace.startSpan("a").end();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await tick();
+    const result = await trace.end();
+    expect(calls.map((c) => lastSegment(c.url))).toEqual(["traces", "spans", "end"]);
+    expect(result.ok).toBe(true);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({ code: "span_conflict", status: 409 });
+  });
+
+  it("retries a span batch and keeps the end time from when end() was called", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { clock, advance } = fakeClock();
+    let spanCalls = 0;
+    const { fn, calls } = fakeFetch((call) => {
+      if (call.url.endsWith("/spans")) {
+        spanCalls++;
+        return spanCalls === 1 ? jsonResponse(503, errorBody("unavailable")) : spansOk();
+      }
+      if (call.url.endsWith("/end")) return endOk();
+      return jsonResponse(201, { ...okBody(TRACE_ID), running: true });
+    });
+    const client = new FireTrace({ endpoint: ENDPOINT, apiKey: KEY, fetch: fn, clock });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    trace.startSpan("a").end();
+    await vi.advanceTimersByTimeAsync(1_000); // the batch goes out, fails, waits to retry
+    await tick();
+    expect(spanCalls).toBe(1);
+
+    advance(500);
+    const pending = trace.end({ status: "ok" }); // frozen now, while the batch is still retrying
+    trace.setMetadata({ late: true });
+    await vi.advanceTimersByTimeAsync(10_000); // backoff elapses, retry succeeds, then the end
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(spanCalls).toBe(2);
+    const endBody = must(calls[calls.length - 1]).body as unknown as EndTraceRequest;
+    expect(endBody.endedAt).toBe(at(500));
+    expect(endBody.metadata).toEqual({});
+  });
+
+  it("marks truncation on the start for the input and on the end for both", async () => {
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      maxContentBytes: 16,
+    });
+    const trace = client.startTrace("t", { id: TRACE_ID, input: "x".repeat(100) });
+    await tick();
+    const start = must(calls[0]).body.trace as { metadata: Record<string, unknown> };
+    expect(start.metadata).toEqual({ "firetrace.truncated": ["input"] });
+    await trace.end({ output: "y".repeat(100) });
+    const endBody = must(calls[1]).body as unknown as EndTraceRequest;
+    expect(endBody.metadata).toEqual({ "firetrace.truncated": ["input", "output"] });
+    expect(String(endBody.output)).toContain("truncated by FireTrace SDK");
+  });
+
+  it("stops queuing after 200 spans without reporting an error", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onError = vi.fn();
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      onError,
+      maxBatchSpans: 1_000,
+    });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    for (let i = 0; i < 201; i++) trace.startSpan(`s-${i}`).end();
+    const result = await trace.end();
+    expect(result.ok).toBe(true);
+    const endBody = must(calls[calls.length - 1]).body as unknown as EndTraceRequest;
+    expect(endBody.spans).toHaveLength(200);
+    expect(onError).not.toHaveBeenCalled();
+  });
+});

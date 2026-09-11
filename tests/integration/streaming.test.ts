@@ -15,6 +15,7 @@ import {
   createTestKey,
   createTestProject,
   db,
+  OWNER_UID,
   postTrace,
   projectData,
   spanDocs,
@@ -141,10 +142,12 @@ describe("streamed ingestion against the emulator", () => {
     doc = (await traceData(project.id, T1))!;
     expect(doc.spanCount).toBe(4);
     expect(doc.errorCount).toBe(all.slice(0, 4).filter((s) => s.status === "error").length);
+    // Batches touch only the trace document; the project's counters catch up at the end.
     counters = await projectData(project.id);
-    expect(counters.spanCount).toBe(4);
-    expect(counters.estimatedBytes).toBe(doc.estimatedBytes);
-    const bytesBeforeEnd = counters.estimatedBytes as number;
+    expect(counters.spanCount).toBe(1);
+    const bytesAtStart = counters.estimatedBytes as number;
+    expect(doc.unsettledSpans).toBe(3);
+    expect(doc.unsettledBytes).toBe((doc.estimatedBytes as number) - bytesAtStart);
     for (const span of await spanDocs(project.id, T1)) {
       expect(span.data.bodyHash).toMatch(/^[0-9a-f]{64}$/);
     }
@@ -191,10 +194,12 @@ describe("streamed ingestion against the emulator", () => {
     expect(doc.endHash).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.bodyHash).toBe(startHash);
     expect((await spanDocs(project.id, T1)).map((s) => s.id)).toEqual(all.map((s) => s.id).sort());
+    expect(doc).not.toHaveProperty("unsettledSpans");
+    expect(doc).not.toHaveProperty("unsettledBytes");
     counters = await projectData(project.id);
     expect(counters).toMatchObject({ traceCount: 1, spanCount: 5 });
     expect(counters.estimatedBytes).toBe(doc.estimatedBytes);
-    expect(counters.estimatedBytes).toBeGreaterThan(bytesBeforeEnd);
+    expect(counters.estimatedBytes).toBeGreaterThan(bytesAtStart);
 
     expect(await day(project.id)).toMatchObject({
       traces: 1,
@@ -322,6 +327,8 @@ describe("streamed ingestion against the emulator", () => {
     const key = await createTestKey(project.id);
     const all = sampleSpans();
     expect((await postTrace(startBody(T1, [all[0], all[1]]), key.plaintext)).status).toBe(201);
+    // A batch the project was never charged for must not be refunded either.
+    expect((await spans(key.plaintext, T1, [all[2]])).status).toBe(200);
 
     await deleteTrace(db(), project.id, T1);
     expect(await traceData(project.id, T1)).toBeNull();
@@ -356,6 +363,64 @@ describe("streamed ingestion against the emulator", () => {
     expect(await used()).toBe(1);
     expect((await end(key.plaintext, T1, { status: "ok" })).status).toBe(200);
     expect(await used()).toBe(1);
+  });
+
+  it("a trial trace may not grow past one request's worth of bytes", async () => {
+    const project = await createProject(db(), {
+      name: "trial-bytes",
+      ownerUid: "stream-guest-2",
+      ownerEmail: "stream-guest-2@example.com",
+      plan: "trial",
+    });
+    const key = await createApiKey(db(), {
+      projectId: project.id,
+      label: "k",
+      createdByUid: "stream-guest-2",
+      pepper: TEST_PEPPER,
+    });
+    const big = (index: number): SpanInput => ({
+      ...syntheticSpan(index),
+      input: "x".repeat(700 * 1024),
+    });
+    expect((await postTrace(startBody(T1), key.plaintext)).status).toBe(201);
+    expect((await spans(key.plaintext, T1, [big(1), big(2)])).status).toBe(200); // ~1.4 MiB
+    const over = await spans(key.plaintext, T1, [big(3)]);
+    expect(over.status).toBe(403);
+    expect(over.body.error?.code).toBe("trial_limit_reached");
+    expect((await traceData(project.id, T1))?.spanCount).toBe(2);
+    const overAtEnd = await end(key.plaintext, T1, { spans: [big(3)] });
+    expect(overAtEnd.status).toBe(403);
+    expect((await end(key.plaintext, T1, { status: "ok" })).status).toBe(200);
+  });
+
+  it("only a key in the trace's environment can add to it or end it", async () => {
+    const project = await createTestProject("environments");
+    const keyFor = (label: string, environment: string) =>
+      createApiKey(db(), {
+        projectId: project.id,
+        label,
+        createdByUid: OWNER_UID,
+        pepper: TEST_PEPPER,
+        environment,
+      });
+    const production = await keyFor("prod", "production");
+    const preview = await keyFor("preview", "preview");
+    const rotated = await keyFor("prod-2", "production");
+    const all = sampleSpans();
+    expect((await postTrace(startBody(T1), production.plaintext)).status).toBe(201);
+
+    const foreign = await spans(preview.plaintext, T1, [all[0]]);
+    expect(foreign.status).toBe(403);
+    expect(foreign.body.error?.code).toBe("forbidden");
+    const foreignEnd = await end(preview.plaintext, T1, { status: "error", costUsd: 1e6 });
+    expect(foreignEnd.status).toBe(403);
+    expect((await traceData(project.id, T1))?.status).toBe("running");
+    expect(await day(project.id, "statsByEnv", `production:${DAY}`)).toBeNull();
+
+    // A rotated key keeps its environment, so it can finish the run.
+    expect((await spans(rotated.plaintext, T1, [all[0]])).status).toBe(200);
+    expect((await end(rotated.plaintext, T1, { status: "ok" })).status).toBe(200);
+    expect(await day(project.id, "statsByEnv", `production:${DAY}`)).toMatchObject({ traces: 1 });
   });
 
   it("evaluators skip a trace that is still running", async () => {

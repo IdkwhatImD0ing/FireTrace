@@ -41,17 +41,18 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
     allowedEmails: env.allowedEmails,
     stamp: { environment: auth.environment, keyId: auth.keyId },
   });
-  const running = normalized.value.trace.status === "running";
+  // `running` and `spanCount` describe the stored trace: a duplicate start
+  // replayed after the end reports the finished state.
   log("info", "ingest.stored", {
     requestId,
     projectId: auth.projectId,
     keyId: auth.keyId,
     environment: auth.environment,
     traceId: normalized.value.trace.id,
-    spanCount: normalized.value.spans.length,
+    spanCount: outcome.spanCount,
     estimatedBytes: normalized.value.estimatedBytes,
     duplicate: outcome.duplicate,
-    running,
+    running: outcome.running,
     ms: Date.now() - startedAt,
   });
   return jsonResponse(
@@ -59,9 +60,9 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
       ok: true,
       traceId: normalized.value.trace.id,
       projectId: auth.projectId,
-      spanCount: normalized.value.spans.length,
+      spanCount: outcome.spanCount,
       duplicate: outcome.duplicate,
-      running,
+      running: outcome.running,
       requestId,
     },
     outcome.created ? 201 : 200,

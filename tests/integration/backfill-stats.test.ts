@@ -1,9 +1,18 @@
 import "./env";
 import { beforeEach, describe, expect, it } from "vitest";
 import { rebuildStats } from "../../scripts/backfill-stats";
+import { createApiKey } from "@/lib/firetrace/projects";
 import { sampleTraceRequest } from "@/lib/firetrace/sample";
 import { addScore } from "@/lib/firetrace/scores";
-import { clearFirestore, createTestKey, createTestProject, db, postTrace } from "./helpers";
+import { TEST_PEPPER } from "./env";
+import {
+  clearFirestore,
+  createTestKey,
+  createTestProject,
+  db,
+  OWNER_UID,
+  postTrace,
+} from "./helpers";
 
 const T1 = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 const T2 = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
@@ -106,5 +115,40 @@ describe("backfill-stats against the emulator", () => {
     for (const id of Object.keys(live)) {
       expect(omit(twice[id], ["costUsd"])).toEqual(omit(rebuilt[id], ["costUsd"]));
     }
+  });
+
+  it("skips running traces but still attributes their scores to their environment", async () => {
+    const project = await createTestProject("running");
+    const key = await createApiKey(db(), {
+      projectId: project.id,
+      label: "prod",
+      createdByUid: OWNER_UID,
+      pepper: TEST_PEPPER,
+      environment: "production",
+    });
+    const running = sampleTraceRequest({ id: T1 });
+    delete running.trace.endedAt;
+    delete running.trace.status;
+    expect((await postTrace(running, key.plaintext)).status).toBe(201);
+    await addScore(
+      db(),
+      project.id,
+      T1,
+      { name: "accuracy", dataType: "numeric", value: 0.8 },
+      { source: "api" },
+    );
+    const envDocs = async () => {
+      const snap = await db().collection("projects").doc(project.id).collection("statsByEnv").get();
+      return Object.fromEntries(snap.docs.map((d) => [d.id, omit(d.data(), ["updatedAt"])]));
+    };
+    const today = new Date().toISOString().slice(0, 10);
+    const live = await envDocs();
+    expect(Object.keys(live)).toEqual([`production:${today}`]);
+
+    const report = await rebuildStats(db(), { projectId: project.id, apply: true });
+    expect(report).toMatchObject({ traces: 0, scores: 1 });
+    const rebuilt = await envDocs();
+    expect(Object.keys(rebuilt)).toEqual([`production:${today}`]);
+    expect(rebuilt[`production:${today}`]).toEqual(live[`production:${today}`]);
   });
 });

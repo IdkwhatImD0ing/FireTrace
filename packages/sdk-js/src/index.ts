@@ -423,6 +423,18 @@ export class FireTrace {
     return serializeError(error, this.includeErrorStacks);
   }
 
+  /**
+   * @internal onError without the throwOnError throw: for failures in the
+   * background, which have no caller to throw to.
+   */
+  notify(error: FireTraceError): void {
+    try {
+      this.onError?.(error);
+    } catch {
+      // never let a reporting hook break the host application
+    }
+  }
+
   /** @internal */
   report<R = IngestResponse>(error: FireTraceError): SendResult<R> {
     if (this.throwOnError) throw error;
@@ -542,7 +554,7 @@ export class Span {
   }
 
   addEvent(name: string, attributes?: Record<string, unknown>): this {
-    if (this.events.length >= 50) return this;
+    if (this.endedAt || this.events.length >= 50) return this;
     const offset = this.trace.client.clock.now() - this.startedMono;
     let prepared: JsonObject | undefined;
     if (attributes) {
@@ -563,6 +575,7 @@ export class Span {
   }
 
   setAttributes(attributes: Record<string, unknown>): this {
+    if (this.endedAt) return this;
     Object.assign(this.attributes, attributes);
     return this;
   }
@@ -611,7 +624,7 @@ export class Span {
       startedAt: this.startedWall.toISOString(),
       endedAt: end,
       attributes,
-      events: this.events,
+      events: [...this.events],
     };
     const provider = clampIdentifier(this.provider);
     const model = clampIdentifier(this.model);
@@ -654,7 +667,6 @@ export class Trace {
   private chain: Promise<void> = Promise.resolve();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private dead: FireTraceError | null = null;
-  private deferredError: FireTraceError | null = null;
   private inputTruncated = false;
 
   /** @internal */
@@ -709,26 +721,20 @@ export class Trace {
 
   /**
    * Run one send. With `throwOnError` the client throws instead of returning
-   * a failure; that must not break the pipeline, so the error is kept and
-   * thrown from `end()`. A throwing redact hook or getter lands here too.
+   * a failure; a background step has no caller to throw to, so the failure is
+   * returned instead and the step decides where it surfaces. A throwing
+   * redact hook or getter lands here too and goes to `onError`.
    */
   private async attempt<R>(send: () => Promise<SendResult<R>>): Promise<SendResult<R>> {
     try {
       return await send();
     } catch (err) {
-      let error = err instanceof FireTraceError ? err : null;
-      if (!error) {
-        error = new FireTraceError(
-          `FireTrace could not serialize trace ${this.id}: ${safeString(err instanceof Error ? err.message : err)}`,
-          { code: "serialize", cause: err },
-        );
-        try {
-          this.client.report(error);
-        } catch {
-          // throwOnError: surfaced from end() below
-        }
-      }
-      this.deferredError ??= error;
+      if (err instanceof FireTraceError) return { ok: false, error: err };
+      const error = new FireTraceError(
+        `FireTrace could not serialize trace ${this.id}: ${safeString(err instanceof Error ? err.message : err)}`,
+        { code: "serialize", cause: err },
+      );
+      this.client.notify(error);
       return { ok: false, error };
     }
   }
@@ -740,15 +746,12 @@ export class Trace {
     try {
       payload = span.toPayload();
     } catch (err) {
-      const error = new FireTraceError(
-        `FireTrace could not serialize span ${span.id}: ${safeString(err instanceof Error ? err.message : err)}`,
-        { code: "serialize", cause: err },
+      this.client.notify(
+        new FireTraceError(
+          `FireTrace could not serialize span ${span.id}: ${safeString(err instanceof Error ? err.message : err)}`,
+          { code: "serialize", cause: err },
+        ),
       );
-      try {
-        this.client.report(error);
-      } catch {
-        this.deferredError ??= error;
-      }
       return;
     }
     this.pending.push(payload);
@@ -776,7 +779,10 @@ export class Trace {
     const batch = this.pending.splice(0);
     this.background(async () => {
       if (this.dead) return;
-      await this.attempt(() => this.client.sendSpans(this.id, batch));
+      const sent = await this.attempt(() => this.client.sendSpans(this.id, batch));
+      // Without throwOnError the client already called onError; with it, this
+      // is the only place a lost batch can be reported. The trace goes on.
+      if (!sent.ok && this.client.throwOnError) this.client.notify(sent.error);
     });
   }
 
@@ -847,13 +853,27 @@ export class Trace {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    // Only spans not yet sent ride along; anything flushed earlier is stored already.
+    // Only spans not yet sent ride along; anything flushed earlier is stored
+    // already. The body is frozen now, so endedAt is the moment end() was
+    // called and nothing that happens while earlier batches drain leaks in.
     const tail = this.pending.splice(0);
+    let body: EndTraceRequest;
+    try {
+      body = this.toEndPayload(tail);
+    } catch (err) {
+      this.client.unregisterLive(this);
+      return this.client.report(
+        new FireTraceError(
+          `FireTrace could not serialize trace ${this.id}: ${safeString(err instanceof Error ? err.message : err)}`,
+          { code: "serialize", cause: err },
+        ),
+      );
+    }
     const slot: { result: SendResult<EndTraceResponse> | null } = { result: null };
     this.background(async () => {
       slot.result = this.dead
         ? { ok: false, error: this.dead }
-        : await this.attempt(() => this.client.sendEnd(this.id, this.toEndPayload(tail)));
+        : await this.attempt(() => this.client.sendEnd(this.id, body));
     });
     await this.chain;
     this.client.unregisterLive(this);
@@ -861,10 +881,9 @@ export class Trace {
       ok: false,
       error: new FireTraceError(`Trace ${this.id} was not sent`, { code: "unknown" }),
     };
-    if (this.client.throwOnError) {
-      if (!outcome.ok) throw outcome.error;
-      if (this.deferredError) throw this.deferredError;
-    }
+    // Only the end request itself (or the start that made the trace dead)
+    // throws here; a lost span batch was reported through onError.
+    if (this.client.throwOnError && !outcome.ok) throw outcome.error;
     return outcome;
   }
 

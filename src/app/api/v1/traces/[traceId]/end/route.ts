@@ -11,23 +11,29 @@ export const runtime = "nodejs";
  * traces:write). Body: { schemaVersion: 1, endedAt, status?, output?, ... }.
  * See docs/ingestion-api.md, "Streaming a trace".
  */
-export const POST = withApiKey("traces:write", async ({ db, auth, requestId, params }, request) => {
-  const traceId = traceIdParam(params);
-  const body = await readJsonBody(request);
-  const normalized = normalizeEndBody(body, traceId);
-  if (!normalized.ok) {
-    const status = normalized.error.code === "payload_too_large" ? 413 : 400;
-    throw new ApiError(status, normalized.error.code, normalized.error.message);
-  }
-  const outcome = await endTrace(db, auth.projectId, traceId, normalized.value);
-  log("info", "ingest.ended", {
-    requestId,
-    projectId: auth.projectId,
-    keyId: auth.keyId,
-    traceId,
-    status: normalized.value.status,
-    spanCount: outcome.spanCount,
-    duplicate: outcome.duplicate,
-  });
-  return jsonResponse({ ok: true, traceId, ...outcome, requestId }, 200, requestId);
-});
+export const POST = withApiKey(
+  "traces:write",
+  async ({ db, env, auth, requestId, params }, request) => {
+    const traceId = traceIdParam(params);
+    const body = await readJsonBody(request);
+    const normalized = normalizeEndBody(body, traceId);
+    if (!normalized.ok) {
+      const status = normalized.error.code === "payload_too_large" ? 413 : 400;
+      throw new ApiError(status, normalized.error.code, normalized.error.message);
+    }
+    const outcome = await endTrace(db, auth.projectId, traceId, normalized.value, {
+      environment: auth.environment,
+      allowedEmails: env.allowedEmails,
+    });
+    log("info", "ingest.ended", {
+      requestId,
+      projectId: auth.projectId,
+      keyId: auth.keyId,
+      traceId,
+      status: normalized.value.status,
+      spanCount: outcome.spanCount,
+      duplicate: outcome.duplicate,
+    });
+    return jsonResponse({ ok: true, traceId, ...outcome, requestId }, 200, requestId);
+  },
+);

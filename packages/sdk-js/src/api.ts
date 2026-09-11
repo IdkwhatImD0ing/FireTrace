@@ -7,6 +7,7 @@ import type {
   ScoreSource,
   ScoreValue,
   SpanKind,
+  StoredTraceStatus,
   TraceStatus,
   Usage,
 } from "./types.js";
@@ -51,12 +52,15 @@ export interface ProjectInfo {
 export interface TraceSummary {
   id: string;
   name: string;
-  status: TraceStatus;
+  /** `running` until a streamed trace's end request arrives. */
+  status: StoredTraceStatus;
   /** Copied from the recording key at ingest; null = unassigned. */
   environment: string | null;
   startedAt: string;
-  endedAt: string;
-  durationMs: number;
+  /** Null while the trace is running. */
+  endedAt: string | null;
+  /** Null while the trace is running. */
+  durationMs: number | null;
   provider: string | null;
   model: string | null;
   sessionId: string | null;
@@ -160,7 +164,8 @@ export interface TracePage {
 }
 
 export interface ListTracesQuery {
-  status?: TraceStatus;
+  /** `running` selects streamed traces that have not ended yet. */
+  status?: StoredTraceStatus;
   model?: string;
   /** Exact trace name. */
   name?: string;

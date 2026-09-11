@@ -120,14 +120,15 @@ On instances that enable trial mode (`FIRETRACE_TRIAL_TRACE_LIMIT`), a trial acc
 
 Append finished spans to a running trace. Body: `{ "schemaVersion": 1, "spans": [ ... ] }` with 1–200 [span objects](./ingestion-api.md#span-object); a trace holds at most 200 spans in total. A span's parent need not have arrived yet. Idempotent per span id: a span already stored with identical content counts as a duplicate, one stored with different content is a `409 span_conflict` and nothing in the batch is written. Rules and examples in [ingestion-api.md](./ingestion-api.md#spans).
 
-| Status | Meaning                                                                                                 |
-| ------ | ------------------------------------------------------------------------------------------------------- |
-| 200    | Body: `{ ok, traceId, added, duplicate, spanCount, requestId }`                                         |
-| 400    | `invalid_json`, or `invalid_trace` (empty batch, schema violation, the 200-span limit)                  |
-| 404    | `not_found`: no such trace in this key's project                                                        |
-| 409    | `trace_finished` (the trace has already ended) or `span_conflict` (a span id reused with other content) |
-| 413    | `payload_too_large`: request over 2 MiB or a span over 750 KiB                                          |
-| 429    | `quota_exhausted`: nothing was stored                                                                   |
+| Status | Meaning                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------ |
+| 200    | Body: `{ ok, traceId, added, duplicate, spanCount, requestId }`                                              |
+| 400    | `invalid_json`, or `invalid_trace` (empty batch, schema violation, the 200-span limit)                       |
+| 403    | `forbidden` (a key from another environment) or, on trial instances, `trial_limit_reached` (2 MiB per trace) |
+| 404    | `not_found`: no such trace in this key's project                                                             |
+| 409    | `trace_finished` (the trace has already ended) or `span_conflict` (a span id reused with other content)      |
+| 413    | `payload_too_large`: request over 2 MiB or a span over 750 KiB                                               |
+| 429    | `quota_exhausted`: nothing was stored                                                                        |
 
 ### `POST /api/v1/traces/{traceId}/end` — scope `traces:write`
 
@@ -137,6 +138,7 @@ Close a running trace. Body: `{ "schemaVersion": 1, "endedAt", "status"?, "provi
 | ------ | --------------------------------------------------------------------------------------------------- |
 | 200    | Body: `{ ok, traceId, duplicate, spanCount, requestId }`                                            |
 | 400    | `invalid_json`, or `invalid_trace` (schema violation, `endedAt` before `startedAt`, the span limit) |
+| 403    | `forbidden` (a key from another environment) or, on trial instances, `trial_limit_reached`          |
 | 404    | `not_found`: no such trace in this key's project                                                    |
 | 409    | `trace_finished` (ended with a different body) or `span_conflict`                                   |
 | 413    | `payload_too_large`: request over 2 MiB, or the finished trace document over 750 KiB                |

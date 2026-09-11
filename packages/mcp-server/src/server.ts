@@ -19,14 +19,16 @@ const TRACE_ID = z
   .regex(/^[0-9a-fA-F]{32}$/, "traceId is 32 hex characters")
   .transform((s) => s.toLowerCase());
 
+/** Trace statuses: `running` is a streamed trace that has not ended. Spans are always finished. */
 const STATUS = z.enum(["ok", "error", "unset", "running"]);
+const SPAN_STATUS = z.enum(["ok", "error", "unset"]);
 
 const SCORE_NAME = z
   .string()
   .regex(/^[A-Za-z0-9_-]{1,64}$/, "letters, digits, '_' and '-' only, at most 64 characters");
 
 function ms(n: number | null): string {
-  if (n === null) return "running";
+  if (n === null) return "—"; // still running; the status column says so
   if (n < 1000) return `${n}ms`;
   if (n < 60_000) return `${(n / 1000).toFixed(2)}s`;
   return `${(n / 60_000).toFixed(1)}m`;
@@ -327,7 +329,7 @@ export function createFireTraceMcpServer(
             .max(40)
             .optional()
             .describe("llm, agent, tool, chain, retriever, embedding, reranker, custom"),
-          status: STATUS.optional(),
+          status: SPAN_STATUS.optional(),
           nameContains: z
             .string()
             .max(200)
@@ -450,7 +452,7 @@ export function createFireTraceMcpServer(
       {
         title: "Record trace",
         description:
-          "Store one complete, immutable trace. `trace` must follow the ingestion schema: id (32 hex), name, status, startedAt/endedAt (ISO-8601), and spans[] each with id (16 hex), parentSpanId, name, kind, status, startedAt, endedAt. Resending an identical trace is a no-op; reusing an id with different content is rejected. Omitting endedAt stores a running trace that the REST API's spans/end endpoints complete later.",
+          "Store one complete, immutable trace. `trace` must follow the ingestion schema: id (32 hex), name, status, startedAt/endedAt (ISO-8601), and spans[] each with id (16 hex), parentSpanId, name, kind, status, startedAt, endedAt. Resending an identical trace is a no-op; reusing an id with different content is rejected. Omitting both endedAt and status stores a running trace that the REST API's spans/end endpoints complete later (status alone without endedAt is rejected).",
         inputSchema: {
           trace: z.record(z.string(), z.unknown()).describe("The trace object (not the envelope)"),
         },

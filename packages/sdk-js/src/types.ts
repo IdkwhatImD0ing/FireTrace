@@ -8,6 +8,9 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type TraceStatus = "ok" | "error" | "unset";
 
+/** What a stored trace reports back: the wire statuses plus `running` for a streamed trace that has not ended. */
+export type StoredTraceStatus = TraceStatus | "running";
+
 export type SpanKind =
   "llm" | "agent" | "tool" | "chain" | "retriever" | "embedding" | "reranker" | "custom";
 

@@ -71,8 +71,14 @@ export function spanDocument(span: NormalizedSpan) {
   };
 }
 
-export type IngestOutcome =
-  { created: true; duplicate: false } | { created: false; duplicate: true };
+export interface IngestOutcome {
+  created: boolean;
+  duplicate: boolean;
+  /** Whether the stored trace is running; a duplicate reports the stored state, not the body's. */
+  running: boolean;
+  /** Spans the stored trace holds. */
+  spanCount: number;
+}
 
 export interface IngestOptions {
   /** FIRETRACE_TRIAL_TRACE_LIMIT; 0 disables trial projects entirely. */
@@ -153,7 +159,13 @@ export async function ingestTrace(
 
       if (traceSnap.exists) {
         if (traceSnap.get("bodyHash") === normalized.bodyHash) {
-          return { created: false, duplicate: true } as const;
+          const storedSpans = traceSnap.get("spanCount");
+          return {
+            created: false,
+            duplicate: true,
+            running: traceSnap.get("status") === "running",
+            spanCount: typeof storedSpans === "number" ? storedSpans : 0,
+          };
         }
         throw new ApiError(
           409,
@@ -227,7 +239,7 @@ export async function ingestTrace(
         lastTraceAt,
         updatedAt: FieldValue.serverTimestamp(),
       });
-      return { created: true, duplicate: false } as const;
+      return { created: true, duplicate: false, running, spanCount: normalized.spans.length };
     });
   } catch (err) {
     rethrowQuotaExhausted(err);
