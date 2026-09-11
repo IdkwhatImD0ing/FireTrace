@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { STATUSES } from "@/lib/firetrace/schema";
+import { STORED_STATUSES } from "@/lib/firetrace/schema";
 import type { TraceFacets, TraceFilters as Filters, TraceSort } from "@/lib/firetrace/types";
 import { withParams } from "@/lib/search-params";
 
@@ -75,7 +75,8 @@ export function TraceFilters({
           <span className="mono-label block">Status</span>
           <select name="status" defaultValue={filters.status ?? ""} className="input mt-1.5">
             <option value="">any</option>
-            {STATUSES.map((s) => (
+            {/* Running traces have no duration or cost yet, so they cannot be sorted by either. */}
+            {STORED_STATUSES.filter((s) => sort === "newest" || s !== "running").map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>

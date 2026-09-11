@@ -41,8 +41,9 @@ export interface TraceSummaryLike {
   /** Copied from the ingesting key; null = unassigned. */
   environment?: string | null;
   startedAt: string;
-  endedAt: string;
-  durationMs: number;
+  /** Null while the trace is still running (status `running`). */
+  endedAt: string | null;
+  durationMs: number | null;
   provider?: string | null;
   model?: string | null;
   sessionId?: string | null;

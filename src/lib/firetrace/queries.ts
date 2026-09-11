@@ -3,7 +3,7 @@ import { parseUtcDateParam, trimmedParam, withParams } from "@/lib/search-params
 import { toSpanDetail, toTraceDetail, toTraceSummary } from "./convert";
 import { parseEnvironmentFilter, storedEnvironment } from "./environment";
 import { ApiError } from "./errors";
-import { LIMITS, STATUSES, type TraceStatus } from "./schema";
+import { LIMITS, STORED_STATUSES, type StoredTraceStatus } from "./schema";
 import {
   TRACE_SORTS,
   type SpanDetail,
@@ -64,7 +64,8 @@ export function encodeCursor(startedAt: string, traceId: string): string {
  */
 export function cursorFor(trace: TraceSummary, sort: TraceSort): string {
   if (sort === "newest") return encodeCursor(trace.startedAt, trace.id);
-  const value = sort === "slowest" ? trace.durationMs : (trace.costUsd ?? 0);
+  // A running trace has no duration yet; like a trace without cost, it sits at 0 in that order.
+  const value = sort === "slowest" ? (trace.durationMs ?? 0) : (trace.costUsd ?? 0);
   return Buffer.from(JSON.stringify([value, trace.id, sort]), "utf8").toString("base64url");
 }
 
@@ -118,11 +119,11 @@ export function parseTraceFilters(
   const first = (key: string, max: number = LIMITS.maxIdentifierLength) =>
     trimmedParam(params, key, max);
   const status = first("status");
-  if (strict && status && !(STATUSES as readonly string[]).includes(status)) {
+  if (strict && status && !(STORED_STATUSES as readonly string[]).includes(status)) {
     throw new ApiError(
       400,
       "invalid_request",
-      `Invalid status "${status}". Use one of: ${STATUSES.join(", ")}.`,
+      `Invalid status "${status}". Use one of: ${STORED_STATUSES.join(", ")}.`,
     );
   }
   const time = (key: "from" | "to") => {
@@ -139,8 +140,8 @@ export function parseTraceFilters(
   };
   return {
     status:
-      status && (STATUSES as readonly string[]).includes(status)
-        ? (status as TraceStatus)
+      status && (STORED_STATUSES as readonly string[]).includes(status)
+        ? (status as StoredTraceStatus)
         : undefined,
     model: first("model"),
     sessionId: first("sessionId"),

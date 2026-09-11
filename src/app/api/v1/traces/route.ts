@@ -20,7 +20,8 @@ import { log } from "@/lib/log";
 export const runtime = "nodejs";
 
 /**
- * POST /api/v1/traces — store one complete, immutable trace.
+ * POST /api/v1/traces — store one trace: complete and immutable when the body
+ * carries `endedAt`, otherwise running until POST /traces/{id}/end.
  *   Authorization: Bearer ft_live_<keyId>_<secret>   (scope traces:write)
  *   Body: { schemaVersion: 1, trace: {...} }  (see docs/api.md)
  */
@@ -40,15 +41,18 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
     allowedEmails: env.allowedEmails,
     stamp: { environment: auth.environment, keyId: auth.keyId },
   });
+  // `running` and `spanCount` describe the stored trace: a duplicate start
+  // replayed after the end reports the finished state.
   log("info", "ingest.stored", {
     requestId,
     projectId: auth.projectId,
     keyId: auth.keyId,
     environment: auth.environment,
     traceId: normalized.value.trace.id,
-    spanCount: normalized.value.spans.length,
+    spanCount: outcome.spanCount,
     estimatedBytes: normalized.value.estimatedBytes,
     duplicate: outcome.duplicate,
+    running: outcome.running,
     ms: Date.now() - startedAt,
   });
   return jsonResponse(
@@ -56,8 +60,9 @@ export const POST = withApiKey("traces:write", async ({ db, env, auth, requestId
       ok: true,
       traceId: normalized.value.trace.id,
       projectId: auth.projectId,
-      spanCount: normalized.value.spans.length,
+      spanCount: outcome.spanCount,
       duplicate: outcome.duplicate,
+      running: outcome.running,
       requestId,
     },
     outcome.created ? 201 : 200,

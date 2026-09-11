@@ -78,11 +78,16 @@ async function main() {
 
   if (result.ok) {
     const r = result.response;
+    const base = endpoint.replace(/\/+$/, "").replace(/\/api\/v1\/traces$/, "");
     console.log(
-      `${r.duplicate ? "Duplicate of existing" : "Stored"} trace ${r.traceId} (${r.spanCount} spans) in project ${r.projectId}`,
+      `${r.duplicate ? "Duplicate of existing" : "Stored"} trace ${r.traceId} (${r.spanCount} spans)`,
     );
+    // The SDK streams by default, and the end response names no project; the
+    // single-request form (streaming: false) does.
     console.log(
-      `View it: ${endpoint.replace(/\/+$/, "").replace(/\/api\/v1\/traces$/, "")}/projects/${r.projectId}/traces/${r.traceId}`,
+      "projectId" in r
+        ? `View it: ${base}/projects/${r.projectId}/traces/${r.traceId}`
+        : `View it from your project's trace list at ${base}/projects (trace ${r.traceId})`,
     );
   } else {
     console.error("Ingest failed:", result.error.message);

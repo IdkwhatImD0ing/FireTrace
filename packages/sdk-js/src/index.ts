@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type {
+  EndTraceRequest,
+  EndTraceResponse,
   IngestErrorBody,
   IngestRequest,
   IngestResponse,
@@ -9,7 +11,10 @@ import type {
   SpanEventPayload,
   SpanKind,
   SpanPayload,
+  SpansRequest,
+  SpansResponse,
   TracePayload,
+  TraceStartPayload,
   TraceStatus,
   Usage,
 } from "./types.js";
@@ -45,13 +50,30 @@ export interface FireTraceOptions {
   fetch?: typeof fetch;
   /** Injectable clocks for tests. */
   clock?: { now(): number; wall(): Date };
+  /**
+   * Send the trace as it happens (the default): the start right away, finished
+   * spans in batches, the end with whatever is left. A crash mid-run then still
+   * leaves a running trace with every span that finished. `false` keeps the
+   * whole trace in memory and sends it in one request from `trace.end()`.
+   */
+  streaming?: boolean;
+  /** Streaming: how long a finished span waits for company before its batch is sent. Default 1000 ms. */
+  flushIntervalMs?: number;
+  /** Streaming: a batch is sent as soon as this many spans are waiting. Default 50. */
+  maxBatchSpans?: number;
 }
 
 export { FireTraceError } from "./errors.js";
 export * from "./api.js";
 
-export type SendResult =
-  { ok: true; response: IngestResponse } | { ok: false; error: FireTraceError };
+export type SendResult<R = IngestResponse> =
+  { ok: true; response: R } | { ok: false; error: FireTraceError };
+
+/** What `trace.end()` resolves with: the end response when streaming, the ingest response otherwise. */
+export type TraceEndResponse = IngestResponse | EndTraceResponse;
+
+/** Mirrors LIMITS.maxSpans on the server. */
+const MAX_SPANS = 200;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -271,11 +293,20 @@ export class FireTrace {
   private readonly redact?: FireTraceOptions["redact"];
   private readonly maxContentBytes: number;
   private readonly includeErrorStacks: boolean;
-  private readonly throwOnError: boolean;
+  /** @internal */
+  readonly throwOnError: boolean;
   private readonly onError?: FireTraceOptions["onError"];
   private readonly fetchImpl: typeof fetch;
   readonly clock: { now(): number; wall(): Date };
+  /** @internal */
+  readonly streaming: boolean;
+  /** @internal */
+  readonly flushIntervalMs: number;
+  /** @internal */
+  readonly maxBatchSpans: number;
   private readonly inFlight = new Set<Promise<unknown>>();
+  /** Streamed traces that have not ended, so flush() can push their waiting spans. */
+  private readonly live = new Set<Trace>();
   private closed = false;
 
   constructor(options: FireTraceOptions) {
@@ -295,22 +326,52 @@ export class FireTrace {
     this.onError = options.onError;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.clock = options.clock ?? { now: () => performance.now(), wall: () => new Date() };
+    this.streaming = options.streaming ?? true;
+    this.flushIntervalMs = options.flushIntervalMs ?? 1_000;
+    this.maxBatchSpans = options.maxBatchSpans ?? 50;
   }
 
+  /** Start a trace. When streaming (the default) this already sends the start request. */
   startTrace(name: string, options: StartTraceOptions = {}): Trace {
     return new Trace(this, name, options);
   }
 
   /** Send a fully built trace payload. */
-  async record(trace: TracePayload): Promise<SendResult> {
+  record(trace: TracePayload): Promise<SendResult> {
     const body: IngestRequest = { schemaVersion: 1, trace };
-    const promise = this.send(body);
+    return this.track(this.send<IngestResponse>(this.url, body));
+  }
+
+  /** @internal */
+  sendStart(trace: TraceStartPayload): Promise<SendResult<IngestResponse>> {
+    const body: IngestRequest = { schemaVersion: 1, trace };
+    return this.track(this.send<IngestResponse>(this.url, body));
+  }
+
+  /** @internal */
+  sendSpans(traceId: string, spans: SpanPayload[]): Promise<SendResult<SpansResponse>> {
+    const body: SpansRequest = { schemaVersion: 1, spans };
+    return this.track(this.send<SpansResponse>(`${this.url}/${traceId}/spans`, body));
+  }
+
+  /** @internal */
+  sendEnd(traceId: string, body: EndTraceRequest): Promise<SendResult<EndTraceResponse>> {
+    return this.track(this.send<EndTraceResponse>(`${this.url}/${traceId}/end`, body));
+  }
+
+  /** @internal */
+  registerLive(trace: Trace): void {
+    this.live.add(trace);
+  }
+
+  /** @internal */
+  unregisterLive(trace: Trace): void {
+    this.live.delete(trace);
+  }
+
+  private track<T>(promise: Promise<T>): Promise<T> {
     this.inFlight.add(promise);
-    try {
-      return await promise;
-    } finally {
-      this.inFlight.delete(promise);
-    }
+    return promise.finally(() => this.inFlight.delete(promise));
   }
 
   /**
@@ -326,15 +387,21 @@ export class FireTrace {
     });
   }
 
-  /** Resolve once every in-flight send has settled. */
+  /**
+   * Send every waiting span batch, then resolve once every in-flight send has
+   * settled. Running traces stay running: only `trace.end()` ends a trace.
+   */
   async flush(): Promise<void> {
+    const traces = [...this.live];
+    for (const trace of traces) trace.flushPending();
+    await Promise.allSettled(traces.map((trace) => trace.settled()));
     await Promise.allSettled([...this.inFlight]);
   }
 
   /** Flush, then refuse further sends. */
   async shutdown(): Promise<void> {
-    this.closed = true;
     await this.flush();
+    this.closed = true;
   }
 
   /** @internal */
@@ -356,8 +423,20 @@ export class FireTrace {
     return serializeError(error, this.includeErrorStacks);
   }
 
+  /**
+   * @internal onError without the throwOnError throw: for failures in the
+   * background, which have no caller to throw to.
+   */
+  notify(error: FireTraceError): void {
+    try {
+      this.onError?.(error);
+    } catch {
+      // never let a reporting hook break the host application
+    }
+  }
+
   /** @internal */
-  report(error: FireTraceError): SendResult {
+  report<R = IngestResponse>(error: FireTraceError): SendResult<R> {
     if (this.throwOnError) throw error;
     try {
       this.onError?.(error);
@@ -367,7 +446,7 @@ export class FireTrace {
     return { ok: false, error };
   }
 
-  private async send(body: IngestRequest): Promise<SendResult> {
+  private async send<R>(url: string, body: unknown): Promise<SendResult<R>> {
     if (this.closed) {
       return this.report(new FireTraceError("FireTrace client is shut down", { code: "closed" }));
     }
@@ -378,14 +457,14 @@ export class FireTrace {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
-        const res = await this.fetchImpl(this.url, {
+        const res = await this.fetchImpl(url, {
           method: "POST",
           headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
           body: payload,
           signal: controller.signal,
         });
         if (res.ok) {
-          const json = (await res.json()) as IngestResponse;
+          const json = (await res.json()) as R;
           return { ok: true, response: json };
         }
         let parsed: IngestErrorBody | null = null;
@@ -475,7 +554,7 @@ export class Span {
   }
 
   addEvent(name: string, attributes?: Record<string, unknown>): this {
-    if (this.events.length >= 50) return this;
+    if (this.endedAt || this.events.length >= 50) return this;
     const offset = this.trace.client.clock.now() - this.startedMono;
     let prepared: JsonObject | undefined;
     if (attributes) {
@@ -496,6 +575,7 @@ export class Span {
   }
 
   setAttributes(attributes: Record<string, unknown>): this {
+    if (this.endedAt) return this;
     Object.assign(this.attributes, attributes);
     return this;
   }
@@ -514,6 +594,7 @@ export class Span {
     if (options.usage) this.usage = sanitizeUsage(options.usage);
     if (options.costUsd !== undefined) this.costUsd = sanitizeCost(options.costUsd);
     if (options.attributes) Object.assign(this.attributes, options.attributes);
+    this.trace.spanEnded(this);
   }
 
   /** @internal */
@@ -543,7 +624,7 @@ export class Span {
       startedAt: this.startedWall.toISOString(),
       endedAt: end,
       attributes,
-      events: this.events,
+      events: [...this.events],
     };
     const provider = clampIdentifier(this.provider);
     const model = clampIdentifier(this.model);
@@ -576,6 +657,18 @@ export class Trace {
   private costUsd?: number;
   private ended = false;
 
+  // Streaming state. Requests for one trace run through `chain` in order
+  // (start, span batches, end); `pending` holds frozen payloads of spans that
+  // finished but have not been sent; `dead` is the start failure that makes
+  // every later request pointless.
+  private readonly pending: SpanPayload[] = [];
+  private queued = 0;
+  private sealed = false;
+  private chain: Promise<void> = Promise.resolve();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private dead: FireTraceError | null = null;
+  private inputTruncated = false;
+
   /** @internal */
   constructor(
     readonly client: FireTrace,
@@ -594,6 +687,13 @@ export class Trace {
     this.metadata = { ...(options.metadata ?? {}) };
     this.startedWall = client.clock.wall();
     this.startedMono = client.clock.now();
+    if (client.streaming) {
+      client.registerLive(this);
+      this.background(async () => {
+        const sent = await this.attempt(() => client.sendStart(this.toStartPayload()));
+        if (!sent.ok) this.dead = sent.error;
+      });
+    }
   }
 
   startSpan(name: string, options: StartSpanOptions = {}): Span {
@@ -611,6 +711,183 @@ export class Trace {
     Object.assign(this.metadata, metadata);
     return this;
   }
+
+  // ---- streaming -----------------------------------------------------------
+
+  /** @internal Queue a step behind every earlier request of this trace. Steps never reject. */
+  private background(step: () => Promise<void>): void {
+    this.chain = this.chain.then(step, () => undefined);
+  }
+
+  /**
+   * Run one send. With `throwOnError` the client throws instead of returning
+   * a failure; a background step has no caller to throw to, so the failure is
+   * returned instead and the step decides where it surfaces. A throwing
+   * redact hook or getter lands here too and goes to `onError`.
+   */
+  private async attempt<R>(send: () => Promise<SendResult<R>>): Promise<SendResult<R>> {
+    try {
+      return await send();
+    } catch (err) {
+      if (err instanceof FireTraceError) return { ok: false, error: err };
+      const error = new FireTraceError(
+        `FireTrace could not serialize trace ${this.id}: ${safeString(err instanceof Error ? err.message : err)}`,
+        { code: "serialize", cause: err },
+      );
+      this.client.notify(error);
+      return { ok: false, error };
+    }
+  }
+
+  /** @internal Streaming: a span finished; freeze its payload and queue it. */
+  spanEnded(span: Span): void {
+    if (!this.client.streaming || this.sealed || this.queued >= MAX_SPANS) return;
+    let payload: SpanPayload;
+    try {
+      payload = span.toPayload();
+    } catch (err) {
+      this.client.notify(
+        new FireTraceError(
+          `FireTrace could not serialize span ${span.id}: ${safeString(err instanceof Error ? err.message : err)}`,
+          { code: "serialize", cause: err },
+        ),
+      );
+      return;
+    }
+    this.pending.push(payload);
+    this.queued++;
+    if (this.pending.length >= this.client.maxBatchSpans) {
+      this.flushPending();
+    } else if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null;
+        this.flushPending();
+      }, this.client.flushIntervalMs);
+      // A waiting batch must not keep a finished process alive; flush() or
+      // shutdown() sends it explicitly.
+      (this.flushTimer as { unref?: () => void }).unref?.();
+    }
+  }
+
+  /** @internal Send the waiting spans now, as one batch. */
+  flushPending(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.pending.length === 0) return;
+    const batch = this.pending.splice(0);
+    this.background(async () => {
+      if (this.dead) return;
+      const sent = await this.attempt(() => this.client.sendSpans(this.id, batch));
+      // Without throwOnError the client already called onError; with it, this
+      // is the only place a lost batch can be reported. The trace goes on.
+      if (!sent.ok && this.client.throwOnError) this.client.notify(sent.error);
+    });
+  }
+
+  /** @internal Resolves once every request queued so far has settled. */
+  settled(): Promise<void> {
+    return this.chain;
+  }
+
+  private clampedIds(): Pick<TracePayload, "provider" | "model" | "sessionId" | "userId"> {
+    const out: Pick<TracePayload, "provider" | "model" | "sessionId" | "userId"> = {};
+    const provider = clampIdentifier(this.provider);
+    const model = clampIdentifier(this.model);
+    const sessionId = clampIdentifier(this.sessionId);
+    const userId = clampIdentifier(this.userId);
+    if (provider) out.provider = provider;
+    if (model) out.model = model;
+    if (sessionId) out.sessionId = sessionId;
+    if (userId) out.userId = userId;
+    return out;
+  }
+
+  private toStartPayload(): TraceStartPayload {
+    const [input, truncated] = this.client.prepareContent(this.input, ["input"]);
+    this.inputTruncated = truncated;
+    const metadata = this.client.prepareObject(this.metadata, ["metadata"]);
+    if (truncated) metadata["firetrace.truncated"] = ["input"];
+    const payload: TraceStartPayload = {
+      id: this.id,
+      name: clampName(this.name, "trace"),
+      startedAt: this.startedWall.toISOString(),
+      tags: clampTags(this.tags),
+      metadata,
+      usage: this.usage,
+      ...this.clampedIds(),
+    };
+    if (input !== undefined) payload.input = input;
+    return payload;
+  }
+
+  private toEndPayload(spans: SpanPayload[]): EndTraceRequest {
+    const elapsed = Math.max(0, this.client.clock.now() - this.startedMono);
+    const [output, outputTruncated] = this.client.prepareContent(this.output, ["output"]);
+    const metadata = this.client.prepareObject(this.metadata, ["metadata"]);
+    const truncated = [
+      this.inputTruncated ? "input" : null,
+      outputTruncated ? "output" : null,
+    ].filter(Boolean) as string[];
+    if (truncated.length) metadata["firetrace.truncated"] = truncated;
+    const { provider, model } = this.clampedIds();
+    const body: EndTraceRequest = {
+      schemaVersion: 1,
+      endedAt: new Date(this.startedWall.getTime() + elapsed).toISOString(),
+      status: this.status,
+      tags: clampTags(this.tags),
+      metadata,
+      usage: this.usage,
+    };
+    if (provider) body.provider = provider;
+    if (model) body.model = model;
+    if (output !== undefined) body.output = output;
+    if (this.costUsd !== undefined) body.costUsd = this.costUsd;
+    if (spans.length) body.spans = spans;
+    return body;
+  }
+
+  private async endStreaming(): Promise<SendResult<TraceEndResponse>> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    // Only spans not yet sent ride along; anything flushed earlier is stored
+    // already. The body is frozen now, so endedAt is the moment end() was
+    // called and nothing that happens while earlier batches drain leaks in.
+    const tail = this.pending.splice(0);
+    let body: EndTraceRequest;
+    try {
+      body = this.toEndPayload(tail);
+    } catch (err) {
+      this.client.unregisterLive(this);
+      return this.client.report(
+        new FireTraceError(
+          `FireTrace could not serialize trace ${this.id}: ${safeString(err instanceof Error ? err.message : err)}`,
+          { code: "serialize", cause: err },
+        ),
+      );
+    }
+    const slot: { result: SendResult<EndTraceResponse> | null } = { result: null };
+    this.background(async () => {
+      slot.result = this.dead
+        ? { ok: false, error: this.dead }
+        : await this.attempt(() => this.client.sendEnd(this.id, body));
+    });
+    await this.chain;
+    this.client.unregisterLive(this);
+    const outcome: SendResult<EndTraceResponse> = slot.result ?? {
+      ok: false,
+      error: new FireTraceError(`Trace ${this.id} was not sent`, { code: "unknown" }),
+    };
+    // Only the end request itself (or the start that made the trace dead)
+    // throws here; a lost span batch was reported through onError.
+    if (this.client.throwOnError && !outcome.ok) throw outcome.error;
+    return outcome;
+  }
+
+  // ---- whole-trace form ----------------------------------------------------
 
   /** Build the wire payload without sending it. */
   toPayload(): TracePayload {
@@ -648,8 +925,12 @@ export class Trace {
     return payload;
   }
 
-  /** End the trace, close any open spans, and send it. Never throws unless throwOnError. */
-  async end(options: EndTraceOptions = {}): Promise<SendResult> {
+  /**
+   * End the trace, close any open spans, and send it: the end request when
+   * streaming (after every earlier span batch), otherwise the whole trace.
+   * Never throws unless throwOnError.
+   */
+  async end(options: EndTraceOptions = {}): Promise<SendResult<TraceEndResponse>> {
     if (this.ended) {
       return this.client.report(
         new FireTraceError(`Trace ${this.id} was already ended`, { code: "already_ended" }),
@@ -668,6 +949,8 @@ export class Trace {
     if (options.metadata) Object.assign(this.metadata, options.metadata);
     if (options.tags) this.tags.push(...options.tags);
     for (const span of this.spans) span.end();
+    this.sealed = true;
+    if (this.client.streaming) return this.endStreaming();
     let payload: TracePayload;
     try {
       payload = this.toPayload();

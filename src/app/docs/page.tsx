@@ -150,8 +150,9 @@ export default async function DocsIntroductionPage() {
           Send your first trace
         </h3>
         <p>
-          One request stores one complete trace with all of its spans. No streaming, no batching, no
-          agent to install. Any language that can POST JSON is a supported client.
+          One request stores one complete trace with all of its spans; a long agent run can instead
+          start the trace first and stream spans as they finish. No agent to install. Any language
+          that can POST JSON is a supported client.
         </p>
         <CodeGroup label="Send a trace" samples={recordSamples(appUrl)} />
         <Disclosure summary="Response · trace stored">
@@ -221,8 +222,8 @@ export default async function DocsIntroductionPage() {
         </h2>
         <CardGrid columns={3}>
           <DocCard href="/docs/ingestion-api" title="Record" icon="terminal">
-            One POST stores a run as a tree of spans with inputs, outputs, tokens, cost, errors and
-            tags.
+            A POST stores a run as a tree of spans with inputs, outputs, tokens, cost, errors and
+            tags, whole or streamed as it happens.
           </DocCard>
           <DocCard href="/docs/api" title="Read" icon="list">
             Filter and page through traces from the dashboard, the REST API or an agent; open one as
@@ -249,8 +250,9 @@ export default async function DocsIntroductionPage() {
             Capacity is bounded by your Firebase plan, not by a retention window.
           </li>
           <li>
-            <strong>One POST per run:</strong> a complete trace with up to 200 nested spans in a
-            single request, deduplicated by a hash of the normalized body.
+            <strong>One POST per run, or streamed:</strong> a complete trace with up to 200 nested
+            spans in a single request, deduplicated by a hash of the normalized body; or a start,
+            span batches and an end, so a crash still leaves what happened.
           </li>
           <li>
             <strong>Agent-native:</strong> the same data is available over MCP, over a REST API

@@ -152,6 +152,7 @@ export async function rebuildStats(db: Firestore, options: RebuildOptions): Prom
         "name",
         "status",
         "startedAt",
+        "endedAt",
         "durationMs",
         "model",
         "usage",
@@ -163,8 +164,11 @@ export async function rebuildStats(db: Firestore, options: RebuildOptions): Prom
     const d = doc.data();
     const startedAt = iso(d.startedAt);
     if (!startedAt) continue;
+    // Scores need every trace's environment, running ones included.
     const environment = environmentFromDocument(d.environment);
     traceEnvironment.set(doc.id, environment);
+    // A running trace (no endedAt yet) is rolled up by its end request, not here.
+    if (d.endedAt === undefined) continue;
     const input: TraceStatsInput = {
       name: typeof d.name === "string" ? d.name : "",
       status: typeof d.status === "string" ? d.status : "unset",

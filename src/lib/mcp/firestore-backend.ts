@@ -157,7 +157,7 @@ export class FirestoreBackend implements TraceBackend {
     return {
       ok: true,
       traceId: normalized.value.trace.id,
-      spanCount: normalized.value.spans.length,
+      spanCount: outcome.spanCount,
       duplicate: outcome.duplicate,
     };
   }

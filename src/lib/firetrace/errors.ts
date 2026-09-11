@@ -14,6 +14,8 @@ export type ApiErrorCode =
   | "insufficient_scope"
   | "not_found"
   | "trace_id_conflict"
+  | "trace_finished"
+  | "span_conflict"
   | "conflict"
   | "payload_too_large"
   | "quota_exhausted"

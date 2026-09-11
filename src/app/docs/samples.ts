@@ -308,6 +308,7 @@ export const INGEST_RESPONSE: CodeSample[] = [
   "projectId": "5eedc0ffee5eedc0ffee5eed",
   "spanCount": 1,
   "duplicate": false,
+  "running": false,
   "requestId": "0f1e2d3c4b5a6978"
 }`,
   },
