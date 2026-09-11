@@ -8,11 +8,13 @@ A small Node.js client for recording LLM and agent traces to a self-deployed [Fi
 
 ## Install
 
-The package is not published to npm yet.
+```bash
+npm install @firetrace/sdk
+```
 
 **Inside this repository** it is already wired up as a workspace package (`"@firetrace/sdk": "workspace:*"` in the root `package.json`), and `import { FireTrace } from "@firetrace/sdk"` resolves to `packages/sdk-js/src/index.ts`. `scripts/send-example-trace.ts` is a complete example.
 
-**In another project**, build and pack a tarball from your clone, then install it:
+**To try unreleased changes** in another project, build and pack a tarball from your clone, then install it:
 
 ```bash
 # in the FireTrace clone
