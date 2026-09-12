@@ -20,10 +20,10 @@ npm install @firetrace/sdk
 # in the FireTrace clone
 pnpm install
 pnpm sdk:build                       # compiles packages/sdk-js/src -> dist/
-cd packages/sdk-js && pnpm pack      # writes firetrace-sdk-0.2.0.tgz (manifest points at dist/)
+cd packages/sdk-js && pnpm pack      # writes firetrace-sdk-0.2.2.tgz (manifest points at dist/)
 
 # in your project
-pnpm add /path/to/firetrace-sdk-0.2.0.tgz
+pnpm add /path/to/firetrace-sdk-0.2.2.tgz
 ```
 
 `pnpm pack` applies the `publishConfig` in `packages/sdk-js/package.json`, so the tarball's entry points are the compiled `dist/index.js` and `dist/index.d.ts`. Installing the directory itself (`pnpm add /path/to/packages/sdk-js`) instead resolves to the TypeScript source and needs a TypeScript-aware loader such as `tsx`.
