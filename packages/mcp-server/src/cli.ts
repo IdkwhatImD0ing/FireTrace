@@ -27,7 +27,7 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
-  const server = createFireTraceMcpServer(backend, { version: "0.1.0" });
+  const server = createFireTraceMcpServer(backend, { version: "0.1.1" });
   await server.connect(new StdioServerTransport());
 }
 

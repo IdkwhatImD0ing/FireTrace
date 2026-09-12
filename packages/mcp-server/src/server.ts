@@ -110,7 +110,7 @@ export function createFireTraceMcpServer(
   options: FireTraceMcpOptions = {},
 ): McpServer {
   const server = new McpServer(
-    { name: options.name ?? "firetrace", version: options.version ?? "0.1.0" },
+    { name: options.name ?? "firetrace", version: options.version ?? "0.1.1" },
     {
       instructions: [
         "FireTrace stores completed LLM/agent traces (a trace is a tree of spans).",
