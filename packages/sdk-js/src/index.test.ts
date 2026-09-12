@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyRedaction,
@@ -1369,5 +1370,423 @@ describe("FireTrace streaming failures and limits", () => {
     const endBody = must(calls[calls.length - 1]).body as unknown as EndTraceRequest;
     expect(endBody.spans).toHaveLength(200);
     expect(onError).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timing: one clock per trace, one end instant. The bug these guard against
+// lives in the gap between the whole-millisecond wall clock and the fractional
+// monotonic one, so `simulatedClock` reproduces that pair on one timeline,
+// deterministically (CONTRIBUTING.md: inject the clock).
+// ---------------------------------------------------------------------------
+
+/** Like the default clocks: `wall()` in whole ms, `now()` fractional, each read a microsecond apart. */
+function simulatedClock() {
+  let t = Date.parse(T0) + 0.5;
+  let seed = 1;
+  return {
+    clock: { now: () => (t += 0.001), wall: () => new Date(Math.floor((t += 0.001))) },
+    /** A seeded random wait under a millisecond (Park-Miller), the same every run. */
+    wait: () => {
+      seed = (seed * 16_807) % 2_147_483_647;
+      t += seed / 2_147_483_647;
+    },
+  };
+}
+
+const epoch = (iso: string) => Date.parse(iso);
+
+/** The end body of each streamed trace, or the whole trace when not streaming. */
+function endBodies(calls: RecordedCall[], streaming: boolean) {
+  return streaming
+    ? calls.filter((c) => c.url.endsWith("/end")).map((c) => c.body as unknown as EndTraceRequest)
+    : calls.map((c) => c.body.trace);
+}
+
+describe("FireTrace timing", () => {
+  it("never ends a span after its parent or its trace (3,000 runs)", async () => {
+    const runs = 3_000;
+    const { clock, wait } = simulatedClock();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
+    for (let i = 0; i < runs; i++) {
+      const trace = client.startTrace("t");
+      wait();
+      const parent = trace.startSpan("parent");
+      wait();
+      const child = parent.startSpan("child");
+      child.end();
+      parent.end();
+      await trace.end();
+    }
+    expect(calls).toHaveLength(runs);
+    const outOfOrder = calls.filter(({ body: { trace } }) => {
+      const [parent, child] = trace.spans.map((s) => epoch(s.endedAt));
+      return !(must(child) <= must(parent) && must(parent) <= epoch(trace.endedAt));
+    }).length;
+    expect(outOfOrder, `${outOfOrder} of ${runs} traces out of order`).toBe(0);
+  });
+
+  it.each([false, true])(
+    "ends every open span at exactly the trace's end (streaming: %s)",
+    async (streaming) => {
+      const runs = 200;
+      const { clock, wait } = simulatedClock();
+      const { fn, calls } = streaming
+        ? streamingFetch()
+        : fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+      const client = new FireTrace({
+        streaming,
+        endpoint: ENDPOINT,
+        apiKey: KEY,
+        fetch: fn,
+        clock,
+      });
+      for (let i = 0; i < runs; i++) {
+        const trace = client.startTrace("t");
+        wait();
+        const outer = trace.startSpan("outer");
+        wait();
+        outer.startSpan("inner");
+        wait();
+        trace.startSpan("sibling");
+        wait();
+        await trace.end();
+      }
+      const ends = endBodies(calls, streaming);
+      expect(ends).toHaveLength(runs);
+      const mismatched = ends.filter(
+        ({ endedAt, spans = [] }) => spans.length !== 3 || spans.some((s) => s.endedAt !== endedAt),
+      ).length;
+      expect(mismatched, `${mismatched} of ${runs} traces`).toBe(0);
+    },
+  );
+
+  it("keeps the end of a span that was ended before the trace", async () => {
+    const { clock, advance } = fakeClock();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
+    const trace = client.startTrace("t");
+    const done = trace.startSpan("done");
+    done.startSpan("open");
+    advance(10);
+    done.end();
+    advance(30);
+    await trace.end();
+    const body = must(calls[0]).body.trace;
+    expect(body.endedAt).toBe(at(40));
+    expect(body.spans.map((s) => [s.name, s.endedAt])).toEqual([
+      ["done", at(10)],
+      ["open", at(40)],
+    ]);
+  });
+
+  it("agrees across the start, an early span batch, and the end when streaming", async () => {
+    const runs = 300;
+    const { clock, wait } = simulatedClock();
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+      maxBatchSpans: 1,
+    });
+    for (let i = 0; i < runs; i++) {
+      const trace = client.startTrace("t", { id: generateTraceId() });
+      wait();
+      const early = trace.startSpan("early");
+      wait();
+      early.end(); // a batch of one, sent before the end
+      await trace.end();
+    }
+    const byTrace = new Map<string, { start?: string; span?: [string, string]; end?: string }>();
+    for (const call of calls) {
+      const id = call.url.endsWith("/traces")
+        ? call.body.trace.id
+        : must(call.url.split("/").at(-2), "trace id");
+      const entry = byTrace.get(id) ?? {};
+      if (call.url.endsWith("/spans")) {
+        const span = must((call.body as unknown as SpansRequest).spans[0]);
+        entry.span = [span.startedAt, span.endedAt];
+      } else if (call.url.endsWith("/end")) {
+        entry.end = (call.body as unknown as EndTraceRequest).endedAt;
+      } else {
+        entry.start = call.body.trace.startedAt;
+      }
+      byTrace.set(id, entry);
+    }
+    expect(byTrace.size).toBe(runs);
+    const disagreeing = [...byTrace.values()].filter(({ start, span, end }) => {
+      if (!start || !span || !end) return true;
+      return !(
+        epoch(start) <= epoch(span[0]) &&
+        epoch(span[0]) <= epoch(span[1]) &&
+        epoch(span[1]) <= epoch(end)
+      );
+    }).length;
+    expect(disagreeing, `${disagreeing} of ${runs} traces`).toBe(0);
+  });
+
+  it("stamps events between their span's start and end", async () => {
+    const runs = 200;
+    const { clock, wait } = simulatedClock();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
+    for (let i = 0; i < runs; i++) {
+      const trace = client.startTrace("t");
+      wait();
+      const ended = trace.startSpan("ended");
+      wait();
+      const open = ended.startSpan("open");
+      ended.addEvent("first");
+      open.addEvent("first");
+      wait();
+      ended.addEvent("last");
+      ended.end();
+      open.addEvent("last");
+      await trace.end();
+    }
+    const spans = calls.flatMap((c) => c.body.trace.spans);
+    expect(spans).toHaveLength(runs * 2);
+    const outside = spans.filter(
+      (s) =>
+        s.events.length !== 2 ||
+        s.events.some(
+          (e) => epoch(e.timestamp) < epoch(s.startedAt) || epoch(e.timestamp) > epoch(s.endedAt),
+        ),
+    ).length;
+    expect(outside, `${outside} of ${spans.length} spans`).toBe(0);
+  });
+
+  it("gives open spans the trace's provisional end before end(), and keeps the stored end after", async () => {
+    const { clock, advance } = fakeClock();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
+    const trace = client.startTrace("t");
+    advance(10);
+    trace.startSpan("open");
+    advance(30);
+    const draft = trace.toPayload();
+    expect(draft.endedAt).toBe(at(40));
+    expect(must(draft.spans[0]).endedAt).toBe(at(40));
+
+    advance(10);
+    await trace.end();
+    advance(100);
+    expect(must(calls[0]).body.trace.endedAt).toBe(at(50));
+    expect(trace.toPayload().endedAt).toBe(at(50));
+    expect(must(trace.toPayload().spans[0]).endedAt).toBe(at(50));
+  });
+});
+
+describe("trace.end({ endedAt })", () => {
+  it.each([false, true])(
+    "ends the trace and its open spans at the given time (streaming: %s)",
+    async (streaming) => {
+      const { clock, advance } = fakeClock();
+      const { fn, calls } = streaming
+        ? streamingFetch()
+        : fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+      const client = new FireTrace({
+        streaming,
+        endpoint: ENDPOINT,
+        apiKey: KEY,
+        fetch: fn,
+        clock,
+      });
+      const trace = client.startTrace("t", { id: TRACE_ID });
+      advance(5);
+      const done = trace.startSpan("done");
+      advance(5);
+      done.end();
+      trace.startSpan("open");
+      advance(90); // sent well after the work finished, as from Next.js after()
+      const result = await trace.end({ status: "ok", endedAt: new Date(Date.parse(T0) + 40) });
+      expect(result.ok).toBe(true);
+      const [end] = endBodies(calls, streaming);
+      expect(must(end).endedAt).toBe(at(40));
+      expect(must(end).spans?.map((s) => [s.name, s.startedAt, s.endedAt])).toEqual([
+        ["done", at(5), at(10)],
+        ["open", at(10), at(40)],
+      ]);
+      expect(trace.toPayload().endedAt).toBe(at(40));
+    },
+  );
+
+  it("accepts epoch milliseconds and truncates only when serializing", async () => {
+    const { clock, advance } = fakeClock();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
+    const trace = client.startTrace("t");
+    trace.startSpan("open");
+    advance(60);
+    await trace.end({ endedAt: Date.parse(T0) + 25.9 });
+    const body = must(calls[0]).body.trace;
+    expect(body.endedAt).toBe(at(25));
+    expect(must(body.spans[0]).endedAt).toBe(at(25));
+  });
+
+  it("never ends before a span start, span end or event already recorded", async () => {
+    const { clock, advance } = fakeClock();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+    });
+    const trace = client.startTrace("t");
+    const parent = trace.startSpan("parent");
+    advance(5);
+    const child = parent.startSpan("child");
+    advance(45);
+    child.end(); // +50, later than the endedAt given below
+    advance(10);
+    parent.addEvent("checked"); // +60
+    advance(10);
+    trace.startSpan("late"); // +70
+    advance(10);
+    await trace.end({ endedAt: new Date(Date.parse(T0) + 40) });
+    const body = must(calls[0]).body.trace;
+    expect(body.endedAt).toBe(at(70));
+    expect(body.spans.map((s) => [s.name, s.startedAt, s.endedAt])).toEqual([
+      ["parent", at(0), at(70)],
+      ["child", at(5), at(50)],
+      ["late", at(70), at(70)],
+    ]);
+  });
+
+  it("reports an invalid time through onError and ends the trace now instead", async () => {
+    const { clock, advance } = fakeClock();
+    const onError = vi.fn();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+      onError,
+    });
+    const invalid: unknown[] = [
+      new Date(Date.parse(T0) - 1),
+      Date.parse(T0) - 0.5,
+      0,
+      new Date("not a date"),
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Date.parse(T0) * 1000, // microseconds: after the year 9999
+      T0, // a string, from untyped callers
+    ];
+    for (const endedAt of invalid) {
+      const trace = client.startTrace("t");
+      trace.startSpan("open");
+      advance(20);
+      const result = await trace.end({ status: "ok", endedAt: endedAt as Date });
+      expect(result.ok).toBe(true);
+    }
+    expect(onError).toHaveBeenCalledTimes(invalid.length);
+    for (const [error] of onError.mock.calls) {
+      expect(error).toBeInstanceOf(FireTraceError);
+      expect(error).toMatchObject({ code: "invalid_end_time" });
+    }
+    // Every run is still recorded, ending when end() was called.
+    expect(calls).toHaveLength(invalid.length);
+    for (const { body } of calls) {
+      expect(epoch(body.trace.endedAt) - epoch(body.trace.startedAt)).toBe(20);
+      expect(must(body.trace.spans[0]).endedAt).toBe(body.trace.endedAt);
+    }
+  });
+
+  it("treats a null endedAt as absent and accepts a Date from another realm", async () => {
+    const { clock, advance } = fakeClock();
+    const onError = vi.fn();
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+      onError,
+    });
+    const first = client.startTrace("t");
+    advance(10);
+    await first.end({ endedAt: null as unknown as Date }); // `capturedAt ?? null`, untyped
+    const foreign = runInNewContext(`new Date(${Date.parse(T0) + 15})`) as Date;
+    expect(foreign instanceof Date).toBe(false);
+    const second = client.startTrace("t");
+    advance(10);
+    await second.end({ endedAt: foreign });
+    expect(onError).not.toHaveBeenCalled();
+    expect(calls.map((c) => c.body.trace.endedAt)).toEqual([at(10), at(15)]);
+  });
+
+  it("keeps the waiting spans for the next end() when a streamed end throws", async () => {
+    const { clock } = fakeClock();
+    const { fn, calls } = streamingFetch();
+    const client = new FireTrace({
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      clock,
+      throwOnError: true,
+    });
+    const trace = client.startTrace("t", { id: TRACE_ID });
+    trace.startSpan("done").end(); // waits for its batch
+    await expect(trace.end({ endedAt: 0 })).rejects.toMatchObject({ code: "invalid_end_time" });
+    await tick();
+    expect(calls.map((c) => lastSegment(c.url))).toEqual(["traces"]);
+    await expect(trace.end()).resolves.toMatchObject({ ok: true });
+    expect(calls.map((c) => lastSegment(c.url))).toEqual(["traces", "end"]);
+    const end = must(calls[1]).body as unknown as EndTraceRequest;
+    expect(end.spans?.map((s) => s.name)).toEqual(["done"]);
+  });
+
+  it("throws an invalid time with throwOnError and leaves the trace open", async () => {
+    const { fn, calls } = fakeFetch(() => jsonResponse(201, okBody(TRACE_ID)));
+    const client = new FireTrace({
+      streaming: false,
+      endpoint: ENDPOINT,
+      apiKey: KEY,
+      fetch: fn,
+      throwOnError: true,
+    });
+    const trace = client.startTrace("t");
+    await expect(trace.end({ endedAt: 0 })).rejects.toMatchObject({ code: "invalid_end_time" });
+    expect(calls).toHaveLength(0);
+    await expect(trace.end()).resolves.toMatchObject({ ok: true });
   });
 });

@@ -20,10 +20,10 @@ npm install @firetrace/sdk
 # in the FireTrace clone
 pnpm install
 pnpm sdk:build                       # compiles packages/sdk-js/src -> dist/
-cd packages/sdk-js && pnpm pack      # writes firetrace-sdk-0.2.2.tgz (manifest points at dist/)
+cd packages/sdk-js && pnpm pack      # writes firetrace-sdk-0.2.3.tgz (manifest points at dist/)
 
 # in your project
-pnpm add /path/to/firetrace-sdk-0.2.2.tgz
+pnpm add /path/to/firetrace-sdk-0.2.3.tgz
 ```
 
 `pnpm pack` applies the `publishConfig` in `packages/sdk-js/package.json`, so the tarball's entry points are the compiled `dist/index.js` and `dist/index.d.ts`. Installing the directory itself (`pnpm add /path/to/packages/sdk-js`) instead resolves to the TypeScript source and needs a TypeScript-aware loader such as `tsx`.
@@ -123,7 +123,7 @@ await client.shutdown();
 | `span.end(opts)`                   | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `attributes`. Idempotent; the first call fixes `endedAt`. When streaming, freezes the span and queues it for the next batch.                  |
 | `trace.setMetadata(metadata)`      | Merge metadata (sent with the end when streaming).                                                                                                                                                     |
 | `trace.toPayload()`                | Build the whole-trace wire payload without sending (for inspection, or for `client.record()` with `streaming: false`; when streaming, the start has already been sent under this id).                  |
-| `trace.end(opts)`                  | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `metadata`, `tags`. Ends open spans and sends the end (streaming) or the whole trace.                                                         |
+| `trace.end(opts)`                  | `opts`: `status`, `output`, `error`, `usage`, `costUsd`, `metadata`, `tags`, `endedAt` ([Timing](#timing)). Ends open spans at the trace's end and sends the end (streaming) or the whole trace.       |
 | `client.record(payload)`           | Send a hand-built, complete `TracePayload` (`{ schemaVersion: 1, trace }` is added). Use a fresh trace id, or `streaming: false`: a trace started by `startTrace()` already exists on the server.      |
 | `client.flush()`                   | Send every waiting span batch, then resolve once all in-flight sends have settled. Running traces stay running.                                                                                        |
 | `client.shutdown()`                | `flush()`, then refuse further sends (they report a `closed` error).                                                                                                                                   |
@@ -161,7 +161,28 @@ Before a process exits, `await client.flush()` (send waiting batches) or `await 
 
 ## Timing
 
-Each trace and span records the wall-clock time at start (`Date`) and measures elapsed time with the monotonic clock (`performance.now()`), so `endedAt` is `startedAt + elapsed` and is never affected by clock adjustments. `trace.end()` uses the same moment for any span that was never ended explicitly. Timestamps are serialized as UTC ISO 8601 strings.
+Every timestamp in a trace comes from one clock. `startTrace()` reads the wall clock (`Date`) and the monotonic clock (`performance.now()`) once; that reading is the trace's anchor and its `startedAt`. Every later timestamp in the trace, span starts and ends and event times alike, is the anchor plus the monotonic time elapsed since then. So:
+
+- Timestamps serialize in the order the calls happened. A span that ends just before its parent, or just before `trace.end()`, is never stamped after it.
+- They are never affected by wall-clock adjustments during the trace, and `endedAt` is never before `startedAt`. Each trace takes a fresh anchor, so a long-running process does not drift from the wall clock.
+
+`trace.end()` reads the clock once, unless you pass [`endedAt`](#sending-a-trace-after-it-ended). That instant is the trace's `endedAt` and the `endedAt` of every span still open, so an open span ends exactly when its trace does. A span you ended yourself keeps its own end.
+
+Timestamps keep fractions of a millisecond until they are serialized, as UTC ISO 8601 strings with whole milliseconds.
+
+Because only `startTrace()` reads the wall clock, moving the wall clock alone does not move span or event times: a test that uses `vi.setSystemTime()` or `jest.setSystemTime()` should inject `clock` instead. The monotonic clock also pauses while a machine sleeps, so a trace that spans a sleep lags the wall clock by that long afterwards.
+
+### Sending a trace after it ended
+
+Code that sends a trace some time after the work finished (Next.js `after()`, Vercel `waitUntil`, a queue) can pass the moment the work ended, so the wait does not count:
+
+```ts
+llm.end({ status: "ok", output: { text } });
+const endedAt = new Date();
+after(() => trace.end({ status: "ok", output: { text }, endedAt }));
+```
+
+`endedAt` takes a `Date` or epoch milliseconds. It becomes the trace's `endedAt` and the end of every span still open, but never earlier than anything the trace already recorded (a span start, a span end, an event): if something came later, the trace ends then instead. So spans stay inside their trace even if the wall clock was adjusted between a span ending and `new Date()`. A value that is not a time, before the trace's start, or after the year 9999 is reported through `onError` as an `invalid_end_time` error and ignored, and the trace ends when `end()` is called. With `throwOnError`, `end()` throws that error instead and the trace stays open, so a corrected `end()` still works.
 
 ## Errors and statuses
 
@@ -191,7 +212,7 @@ A send makes up to `1 + maxRetries` attempts (three by default).
 - **Never retried**: `400`, `401`, `403`, `404`, `409`, `413`, and any other `4xx`.
 - **Backoff** before retry `k` (1-based): base `min(5000, 300 · 2^(k−1))` ms with jitter between half and the full base, so roughly 150–300 ms, then 300–600 ms with the defaults.
 
-When every attempt fails, the result depends on `throwOnError`: `false` (default) calls `onError` and returns `{ ok: false, error }`; `true` throws the `FireTraceError`. `error.code` is the server's error code (`invalid_api_key`, `trace_id_conflict`, `payload_too_large`, `quota_exhausted`, ...), `http_<status>` when the body could not be parsed, or one of the SDK's own codes: `config`, `closed`, `already_ended`, `timeout`, `network`, `unknown`. `error.requestId` carries the server's request id when available.
+When every attempt fails, the result depends on `throwOnError`: `false` (default) calls `onError` and returns `{ ok: false, error }`; `true` throws the `FireTraceError`. `error.code` is the server's error code (`invalid_api_key`, `trace_id_conflict`, `payload_too_large`, `quota_exhausted`, ...), `http_<status>` when the body could not be parsed, or one of the SDK's own codes: `config`, `closed`, `already_ended`, `invalid_end_time`, `timeout`, `network`, `unknown`. `error.requestId` carries the server's request id when available.
 
 `trace.end()` returns a promise that settles when the end request (and, when streaming, every span batch queued before it) has finished, retries included. If you choose not to await it, call `client.flush()` or `client.shutdown()` before the process exits, or the end and any waiting spans may be lost. When streaming, a failed span batch is reported the same way but does not stop the trace: later batches and the end are still sent.
 
