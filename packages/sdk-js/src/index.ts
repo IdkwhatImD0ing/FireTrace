@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { types } from "node:util";
 import type {
   EndTraceRequest,
   EndTraceResponse,
@@ -75,6 +76,9 @@ export type TraceEndResponse = IngestResponse | EndTraceResponse;
 /** Mirrors LIMITS.maxSpans on the server. */
 const MAX_SPANS = 200;
 
+/** The latest time the server's timestamps (four-digit years) can carry. */
+const MAX_END_MS = Date.parse("9999-12-31T23:59:59.999Z");
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -85,6 +89,11 @@ export function generateTraceId(): string {
 
 export function generateSpanId(): string {
   return randomBytes(8).toString("hex");
+}
+
+/** Timestamps are fractional epoch milliseconds until here; the Date truncates to whole ones. */
+function isoTime(ms: number): string {
+  return new Date(ms).toISOString();
 }
 
 const NON_RETRYABLE = new Set([400, 401, 403, 404, 409, 413]);
@@ -265,6 +274,13 @@ export interface EndTraceOptions {
   costUsd?: number;
   metadata?: Record<string, unknown>;
   tags?: string[];
+  /**
+   * When the trace ended, if not now: a `Date` or epoch milliseconds, from the
+   * trace's start to the year 9999, and never earlier than a span start, span
+   * end or event already recorded. For sending later than the work finished
+   * (Next.js `after()`, `waitUntil`, a queue). Spans still open end then too.
+   */
+  endedAt?: Date | number;
 }
 
 export interface StartSpanOptions {
@@ -516,9 +532,9 @@ export class Span {
   readonly parentSpanId: string | null;
   readonly name: string;
   private readonly kind: SpanKind;
-  private readonly startedWall: Date;
-  private readonly startedMono: number;
-  private endedAt: string | null = null;
+  /** Read from the trace's clock, like the end and every event. */
+  private readonly startedAt: number;
+  private endedAt: number | null = null;
   private status: TraceStatus = "unset";
   private provider?: string;
   private model?: string;
@@ -545,8 +561,7 @@ export class Span {
     this.model = options.model;
     this.input = options.input;
     this.attributes = { ...(options.attributes ?? {}) };
-    this.startedWall = trace.client.clock.wall();
-    this.startedMono = trace.client.clock.now();
+    this.startedAt = trace.stamp();
   }
 
   startSpan(name: string, options: StartSpanOptions = {}): Span {
@@ -554,8 +569,8 @@ export class Span {
   }
 
   addEvent(name: string, attributes?: Record<string, unknown>): this {
-    if (this.endedAt || this.events.length >= 50) return this;
-    const offset = this.trace.client.clock.now() - this.startedMono;
+    if (this.endedAt !== null || this.events.length >= 50) return this;
+    const timestamp = this.trace.stamp();
     let prepared: JsonObject | undefined;
     if (attributes) {
       try {
@@ -568,22 +583,27 @@ export class Span {
     }
     this.events.push({
       name: clampName(name, "event"),
-      timestamp: new Date(this.startedWall.getTime() + offset).toISOString(),
+      timestamp: isoTime(timestamp),
       ...(prepared ? { attributes: prepared } : {}),
     });
     return this;
   }
 
   setAttributes(attributes: Record<string, unknown>): this {
-    if (this.endedAt) return this;
+    if (this.endedAt !== null) return this;
     Object.assign(this.attributes, attributes);
     return this;
   }
 
   end(options: EndSpanOptions = {}): void {
-    if (this.endedAt) return;
-    const elapsed = Math.max(0, this.trace.client.clock.now() - this.startedMono);
-    this.endedAt = new Date(this.startedWall.getTime() + elapsed).toISOString();
+    if (this.endedAt === null) this.endAt(this.trace.stamp(), options);
+  }
+
+  /** @internal End at `t` from the trace's clock; `trace.end()` passes its own end. */
+  endAt(t: number, options: EndSpanOptions = {}): void {
+    if (this.endedAt !== null) return;
+    const end = Math.max(this.startedAt, t);
+    this.endedAt = end;
     if (options.error !== undefined) {
       Object.assign(this.attributes, this.trace.client.errorAttributes(options.error));
       this.status = options.status ?? "error";
@@ -594,17 +614,13 @@ export class Span {
     if (options.usage) this.usage = sanitizeUsage(options.usage);
     if (options.costUsd !== undefined) this.costUsd = sanitizeCost(options.costUsd);
     if (options.attributes) Object.assign(this.attributes, options.attributes);
-    this.trace.spanEnded(this);
+    this.trace.spanEnded(this, end);
   }
 
-  /** @internal */
-  toPayload(): SpanPayload {
+  /** @internal A span still open ends at `openEnd` (the trace's end, or a provisional one). */
+  toPayload(openEnd: number): SpanPayload {
     const client = this.trace.client;
-    const end =
-      this.endedAt ??
-      new Date(
-        this.startedWall.getTime() + Math.max(0, client.clock.now() - this.startedMono),
-      ).toISOString();
+    const end = this.endedAt ?? Math.max(this.startedAt, openEnd);
     const [input, inputTruncated] = client.prepareContent(this.input, ["spans", this.id, "input"]);
     const [output, outputTruncated] = client.prepareContent(this.output, [
       "spans",
@@ -621,8 +637,8 @@ export class Span {
       name: clampName(this.name, "span"),
       kind: this.kind,
       status: this.status,
-      startedAt: this.startedWall.toISOString(),
-      endedAt: end,
+      startedAt: isoTime(this.startedAt),
+      endedAt: isoTime(end),
       attributes,
       events: [...this.events],
     };
@@ -641,8 +657,15 @@ export class Span {
 export class Trace {
   readonly id: string;
   readonly name: string;
-  private readonly startedWall: Date;
-  private readonly startedMono: number;
+  // One clock reading anchors every timestamp in the trace, spans and events
+  // included (see now()), so they all share one offset from true time and
+  // serialize in the order they were taken. `anchorWall` is also `startedAt`.
+  private readonly anchorWall: number;
+  private readonly anchorMono: number;
+  /** The latest span start, span end or event; the trace never ends before it. */
+  private latest: number;
+  /** The one end instant, fixed by end(); spans still open end at it too. */
+  private endedAt: number | null = null;
   private readonly spans: Span[] = [];
   private status: TraceStatus;
   private provider?: string;
@@ -655,7 +678,6 @@ export class Trace {
   private metadata: Record<string, unknown>;
   private usage: Usage = {};
   private costUsd?: number;
-  private ended = false;
 
   // Streaming state. Requests for one trace run through `chain` in order
   // (start, span batches, end); `pending` holds frozen payloads of spans that
@@ -685,8 +707,10 @@ export class Trace {
     this.tags = [...(options.tags ?? [])];
     this.input = options.input;
     this.metadata = { ...(options.metadata ?? {}) };
-    this.startedWall = client.clock.wall();
-    this.startedMono = client.clock.now();
+    // wall() first: the anchor then never runs ahead of the wall clock.
+    this.anchorWall = client.clock.wall().getTime();
+    this.anchorMono = client.clock.now();
+    this.latest = this.anchorWall;
     if (client.streaming) {
       client.registerLive(this);
       this.background(async () => {
@@ -698,6 +722,18 @@ export class Trace {
 
   startSpan(name: string, options: StartSpanOptions = {}): Span {
     return this.createSpan(name, null, options);
+  }
+
+  /** @internal The trace's clock: fractional epoch ms, never before the trace's start. */
+  now(): number {
+    return this.anchorWall + Math.max(0, this.client.clock.now() - this.anchorMono);
+  }
+
+  /** @internal now(), for a span start or end or an event: recorded, so the end never precedes it. */
+  stamp(): number {
+    const t = this.now();
+    this.latest = Math.max(this.latest, t);
+    return t;
   }
 
   /** @internal */
@@ -739,12 +775,12 @@ export class Trace {
     }
   }
 
-  /** @internal Streaming: a span finished; freeze its payload and queue it. */
-  spanEnded(span: Span): void {
+  /** @internal Streaming: a span finished at `end`; freeze its payload and queue it. */
+  spanEnded(span: Span, end: number): void {
     if (!this.client.streaming || this.sealed || this.queued >= MAX_SPANS) return;
     let payload: SpanPayload;
     try {
-      payload = span.toPayload();
+      payload = span.toPayload(end);
     } catch (err) {
       this.client.notify(
         new FireTraceError(
@@ -812,7 +848,7 @@ export class Trace {
     const payload: TraceStartPayload = {
       id: this.id,
       name: clampName(this.name, "trace"),
-      startedAt: this.startedWall.toISOString(),
+      startedAt: isoTime(this.anchorWall),
       tags: clampTags(this.tags),
       metadata,
       usage: this.usage,
@@ -822,8 +858,7 @@ export class Trace {
     return payload;
   }
 
-  private toEndPayload(spans: SpanPayload[]): EndTraceRequest {
-    const elapsed = Math.max(0, this.client.clock.now() - this.startedMono);
+  private toEndPayload(spans: SpanPayload[], endedAt: number): EndTraceRequest {
     const [output, outputTruncated] = this.client.prepareContent(this.output, ["output"]);
     const metadata = this.client.prepareObject(this.metadata, ["metadata"]);
     const truncated = [
@@ -834,7 +869,7 @@ export class Trace {
     const { provider, model } = this.clampedIds();
     const body: EndTraceRequest = {
       schemaVersion: 1,
-      endedAt: new Date(this.startedWall.getTime() + elapsed).toISOString(),
+      endedAt: isoTime(endedAt),
       status: this.status,
       tags: clampTags(this.tags),
       metadata,
@@ -848,18 +883,18 @@ export class Trace {
     return body;
   }
 
-  private async endStreaming(): Promise<SendResult<TraceEndResponse>> {
+  private async endStreaming(endedAt: number): Promise<SendResult<TraceEndResponse>> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
     // Only spans not yet sent ride along; anything flushed earlier is stored
-    // already. The body is frozen now, so endedAt is the moment end() was
-    // called and nothing that happens while earlier batches drain leaks in.
+    // already. The body is frozen now, with the end instant end() fixed, so
+    // nothing that happens while earlier batches drain leaks in.
     const tail = this.pending.splice(0);
     let body: EndTraceRequest;
     try {
-      body = this.toEndPayload(tail);
+      body = this.toEndPayload(tail, endedAt);
     } catch (err) {
       this.client.unregisterLive(this);
       return this.client.report(
@@ -891,8 +926,8 @@ export class Trace {
 
   /** Build the wire payload without sending it. */
   toPayload(): TracePayload {
-    const elapsed = Math.max(0, this.client.clock.now() - this.startedMono);
-    const endedAt = new Date(this.startedWall.getTime() + elapsed).toISOString();
+    // The end end() fixed; before that, a provisional one read from the anchor.
+    const endedAt = this.endedAt ?? this.now();
     const [input, inputTruncated] = this.client.prepareContent(this.input, ["input"]);
     const [output, outputTruncated] = this.client.prepareContent(this.output, ["output"]);
     const metadata = this.client.prepareObject(this.metadata, ["metadata"]);
@@ -904,12 +939,12 @@ export class Trace {
       id: this.id,
       name: clampName(this.name, "trace"),
       status: this.status,
-      startedAt: this.startedWall.toISOString(),
-      endedAt,
+      startedAt: isoTime(this.anchorWall),
+      endedAt: isoTime(endedAt),
       tags: clampTags(this.tags),
       metadata,
       usage: this.usage,
-      spans: this.spans.slice(0, 200).map((s) => s.toPayload()),
+      spans: this.spans.slice(0, 200).map((s) => s.toPayload(endedAt)),
     };
     const provider = clampIdentifier(this.provider);
     const model = clampIdentifier(this.model);
@@ -928,15 +963,33 @@ export class Trace {
   /**
    * End the trace, close any open spans, and send it: the end request when
    * streaming (after every earlier span batch), otherwise the whole trace.
+   * One instant ends the trace and every span still open: `options.endedAt`,
+   * or the clock read once here, and never before anything already recorded.
    * Never throws unless throwOnError.
    */
   async end(options: EndTraceOptions = {}): Promise<SendResult<TraceEndResponse>> {
-    if (this.ended) {
+    if (this.endedAt !== null) {
       return this.client.report(
         new FireTraceError(`Trace ${this.id} was already ended`, { code: "already_ended" }),
       );
     }
-    this.ended = true;
+    // null is "not given" to untyped callers; isDate accepts Dates from any realm.
+    const raw = options.endedAt;
+    const given = raw == null ? undefined : types.isDate(raw) ? raw.getTime() : raw;
+    // `typeof` also catches untyped callers.
+    const valid = typeof given === "number" && given >= this.anchorWall && given <= MAX_END_MS;
+    if (given !== undefined && !valid) {
+      const error = new FireTraceError(
+        `endedAt for trace ${this.id} must be a Date or epoch milliseconds from its start (${isoTime(this.anchorWall)}) to the year 9999`,
+        { code: "invalid_end_time" },
+      );
+      // With throwOnError the caller hears about it and the trace stays open;
+      // otherwise the run is still recorded, ending now.
+      if (this.client.throwOnError) throw error;
+      this.client.notify(error);
+    }
+    const endedAt = Math.max(valid ? given : this.now(), this.latest);
+    this.endedAt = endedAt;
     if (options.error !== undefined) {
       Object.assign(this.metadata, this.client.errorAttributes(options.error));
       this.status = options.status ?? "error";
@@ -948,9 +1001,9 @@ export class Trace {
     if (options.costUsd !== undefined) this.costUsd = sanitizeCost(options.costUsd);
     if (options.metadata) Object.assign(this.metadata, options.metadata);
     if (options.tags) this.tags.push(...options.tags);
-    for (const span of this.spans) span.end();
+    for (const span of this.spans) span.endAt(endedAt);
     this.sealed = true;
-    if (this.client.streaming) return this.endStreaming();
+    if (this.client.streaming) return this.endStreaming(endedAt);
     let payload: TracePayload;
     try {
       payload = this.toPayload();
