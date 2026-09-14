@@ -9,7 +9,7 @@ A score has a `name` (letters, digits, `_` and `-`; it doubles as the display na
 | Source       | Written by                                                                            |
 | ------------ | ------------------------------------------------------------------------------------- |
 | `api`        | `POST /api/v1/traces/{traceId}/scores` ([api.md](./api.md#scores)) or MCP `add_score` |
-| `annotation` | The Scores tab of a trace page in the dashboard                                       |
+| `annotation` | The Scores section of a trace page in the dashboard                                   |
 | `eval`       | An evaluator run; the score also carries `evaluatorId` and `runId`                    |
 
 Scores are append-only. Adding a name again records a newer score; the trace's summary shows the newest per name and the trace page lists the whole history. A trace holds at most 100 scores. Deleting a score is explicit (dashboard, `DELETE /api/v1/traces/{traceId}/scores/{scoreId}`); deleting a trace deletes its scores.
@@ -56,7 +56,7 @@ Seven templates are offered as starting points (correctness, answer relevance, g
 
 ## Run an evaluator
 
-- **One trace**: on a trace page, open the Scores tab, pick an evaluator, press Run. The verdict appears as a score with source `eval` and the judge's reasoning as its comment.
+- **One trace**: on a trace page, find the Scores section in the inspector, pick an evaluator, press Run. The verdict appears as a score with source `eval` and the judge's reasoning as its comment.
 - **Many traces**: on the trace list, filter as usual, pick an evaluator in the bar under the filters, and press Run. The evaluator runs over the newest 50 traces matching the filters, four at a time, and reports how many were scored, skipped, or failed.
 
 A trace that already carries a score from the same evaluator is **skipped** unless you tick re-run; forcing a re-run records an additional score and the newest one becomes the summary value.

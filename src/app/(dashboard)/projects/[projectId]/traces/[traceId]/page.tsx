@@ -205,22 +205,19 @@ export default async function TracePage({
         trace={trace}
         spans={spans}
         projectId={projectId}
-        scoresTab={{
-          badge: scores.length || undefined,
-          content: (
-            <>
-              {isOwner && (
-                <RunEvaluatorButton
-                  projectId={projectId}
-                  traceId={traceId}
-                  evaluators={evaluators.map((e) => ({ id: e.id, name: e.name }))}
-                  configured={evalConfigured}
-                />
-              )}
-              <ScoresPanel projectId={projectId} traceId={traceId} scores={scores} />
-            </>
-          ),
-        }}
+        scoresSection={
+          <>
+            {isOwner && (
+              <RunEvaluatorButton
+                projectId={projectId}
+                traceId={traceId}
+                evaluators={evaluators.map((e) => ({ id: e.id, name: e.name }))}
+                configured={evalConfigured}
+              />
+            )}
+            <ScoresPanel projectId={projectId} traceId={traceId} scores={scores} />
+          </>
+        }
       />
     </div>
   );

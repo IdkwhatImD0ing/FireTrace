@@ -75,7 +75,7 @@ From your local clone, send the example trace to the deployment using the key yo
 FIRETRACE_ENDPOINT=https://<your-domain> FIRETRACE_API_KEY=ft_live_... pnpm trace:example
 ```
 
-The script (`scripts/send-example-trace.ts`) uses the SDK to send one trace with an agent root span, a tool span, and an LLM span, then prints `Stored trace <id> (3 spans) in project <projectId>` and the URL of the trace page. Open it and confirm the tree, the waterfall, and the inspector tabs render. Run the command a second time: the response is a duplicate (`200`, `"duplicate": true`) and the project's trace count does not change.
+The script (`scripts/send-example-trace.ts`) uses the SDK to send one trace with an agent root span, a tool span, and an LLM span, then prints `Stored trace <id> (3 spans) in project <projectId>` and the URL of the trace page. Open it and confirm the tree, the waterfall, and the inspector render. Run the command a second time: the response is a duplicate (`200`, `"duplicate": true`) and the project's trace count does not change.
 
 Without Node.js, use the curl example from `docs/ingestion-api.md`.
 

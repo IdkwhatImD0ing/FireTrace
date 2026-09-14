@@ -196,7 +196,7 @@ FireTrace has no dedicated error field. Errors are recorded as attributes, and t
 | `error.message` | `exception.message`             | Human-readable message  |
 | `error.stack`   | `exception.stacktrace`          | Stack trace (optional)  |
 
-Set the span's `status` to `"error"` as well; the Error tab and the trace's `errorCount` are driven by attributes and status respectively. The JavaScript SDK writes `error.type` and `error.message` (and `error.stack` only when `includeErrorStacks: true`) into span `attributes` for `span.end({ error })` and into trace `metadata` for `trace.end({ error })`, and sets the status to `"error"` unless you pass an explicit status. The SDK also records `firetrace.truncated: ["input" | "output"]` in `attributes` or `metadata` when it truncated a value client-side.
+Set the span's `status` to `"error"` as well; the inspector's Error section and the trace's `errorCount` are driven by attributes and status respectively. The JavaScript SDK writes `error.type` and `error.message` (and `error.stack` only when `includeErrorStacks: true`) into span `attributes` for `span.end({ error })` and into trace `metadata` for `trace.end({ error })`, and sets the status to `"error"` unless you pass an explicit status. The SDK also records `firetrace.truncated: ["input" | "output"]` in `attributes` or `metadata` when it truncated a value client-side.
 
 Example span with an error:
 

@@ -60,8 +60,7 @@ test("a rating recorded after the trace lands in its metadata", async ({ request
 
 test("the trace page shows the patched metadata in the inspector", async () => {
   await page.goto(`/projects/${projectId}/traces/${TRACE_ID}`);
-  await page.getByRole("tab", { name: /^Metadata/ }).click();
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByRole("region", { name: "Metadata" });
   await expect(panel).toContainText("feedback");
   await expect(panel).toContainText("thumbs-up");
   await expect(panel).toContainText("cited the wrong page");

@@ -279,8 +279,8 @@ export default async function DocsIntroductionPage() {
         <p>
           There is no dedicated error field. A failing step sets{" "}
           <code>status: &quot;error&quot;</code> and records <code>error.type</code> and{" "}
-          <code>error.message</code> in its <code>attributes</code>; the dashboard&apos;s Error tab
-          reads them from there. Full rules in{" "}
+          <code>error.message</code> in its <code>attributes</code>; the dashboard&apos;s Error
+          section reads them from there. Full rules in{" "}
           <Link href="/docs/ingestion-api">the ingestion API</Link>.
         </p>
         <CodeGroup label="Span trees and errors" samples={spanSamples()} />

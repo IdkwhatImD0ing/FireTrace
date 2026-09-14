@@ -13,7 +13,7 @@ const PLACEHOLDER: Record<ScoreDataType, string> = {
   boolean: "",
 };
 
-/** Scores tab of the trace inspector: the trace's score history plus an annotation form. */
+/** Scores section of the trace inspector: the trace's score history plus an annotation form. */
 export function ScoresPanel({
   projectId,
   traceId,

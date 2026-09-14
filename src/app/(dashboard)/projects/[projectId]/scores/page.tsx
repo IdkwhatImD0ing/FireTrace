@@ -113,7 +113,7 @@ export default async function ProjectScoresPage({
             title="No scores yet."
             body={
               <>
-                Add one from the Scores tab of a trace page, send{" "}
+                Add one from the Scores section of a trace page, send{" "}
                 <code className="font-mono text-ink">POST /api/v1/traces/{"{traceId}"}/scores</code>{" "}
                 from your application, or let an agent call{" "}
                 <code className="font-mono text-ink">add_score</code> over MCP.
