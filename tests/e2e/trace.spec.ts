@@ -155,6 +155,7 @@ test("a streamed trace that has not ended shows as running in the list and on it
   });
   delete body.trace.endedAt;
   delete body.trace.status;
+  delete body.trace.output; // arrives with the end
   body.trace.spans = body.trace.spans.slice(0, 2);
   const res = await postTrace(page.request, apiKey, body);
   expect(res.status()).toBe(201);
@@ -170,4 +171,34 @@ test("a streamed trace that has not ended shows as running in the list and on it
   await expect(page.getByRole("heading", { name: "still-running", level: 1 })).toBeVisible();
   await expect(page.getByText("running", { exact: true }).first()).toBeVisible();
   await expect(options()).toHaveCount(3); // trace row + the two spans that arrived
+  // The output has not arrived yet; it was not dropped.
+  await expect(
+    page.getByRole("complementary", { name: "Inspector" }).getByRole("region", { name: "Output" }),
+  ).toContainText("still running");
+});
+
+test("empty sections are left out; a failed span without details still shows an Error section", async () => {
+  const id = "e".repeat(32);
+  const body = sampleTraceRequest({
+    id,
+    name: "bare-failure",
+    startedAt: new Date(todayMs + 20 * 60_000).toISOString(),
+  });
+  body.trace.metadata = {};
+  const tool = body.trace.spans.find((s) => s.name === "lookup-example")!;
+  tool.attributes = {};
+  expect((await postTrace(page.request, apiKey, body)).status()).toBe(201);
+
+  await page.goto(`/projects/${projectId}/traces/${id}`);
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(inspector.getByRole("region", { name: "Details" })).toBeVisible();
+  await expect(inspector.getByRole("region", { name: "Metadata" })).toHaveCount(0);
+
+  await options()
+    .filter({ hasText: /^lookup-example/ })
+    .click();
+  await expect(inspector.getByRole("region", { name: "Error" })).toContainText(
+    "attached no error details",
+  );
+  await expect(inspector.getByRole("region", { name: "Attributes" })).toHaveCount(0);
 });

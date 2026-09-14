@@ -64,7 +64,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = useId();
   return (
     <section aria-labelledby={id} className="py-4 last:pb-0">
-      <h3 id={id} className="mono-label mb-2">
+      <h3 id={id} className="mb-2 font-mono text-xs tracking-widest text-ink uppercase">
         {title}
       </h3>
       {children}
@@ -184,14 +184,20 @@ export function TraceExplorer({
     target?.focus();
   }
 
-  const traceSections = (
+  const traceSections = () => (
     <>
       <Section title="Input">
         <MessageList value={trace.input} />
       </Section>
       <Section title="Output">
-        <MessageList value={trace.output} />
+        <MessageList
+          value={trace.output}
+          emptyLabel={
+            trace.status === "running" ? "Not yet: the trace is still running" : undefined
+          }
+        />
       </Section>
+      {scoresSection && <Section title="Scores">{scoresSection}</Section>}
       <Section title="Details">
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Fact label="status" value={<StatusBadge status={trace.status} />} mono={false} />
@@ -234,7 +240,6 @@ export function TraceExplorer({
           <JsonView value={trace.metadata} />
         </Section>
       )}
-      {scoresSection && <Section title="Scores">{scoresSection}</Section>}
     </>
   );
 
@@ -252,11 +257,11 @@ export function TraceExplorer({
         {(span.status === "error" || Boolean(err.message)) && (
           <Section title="Error">
             <div className="space-y-3">
-              <p className="text-sm text-ink-2">
-                {err.message
-                  ? "The span reported an error."
-                  : "The span ended with status error but attached no error details."}
-              </p>
+              {!err.message && (
+                <p className="text-sm text-ink-2">
+                  The span ended with status error but attached no error details.
+                </p>
+              )}
               {err.type && <Fact label="type" value={err.type} />}
               {err.message && (
                 <pre className="pre border-crit/40 bg-crit/10 text-crit-2">{err.message}</pre>
@@ -573,55 +578,50 @@ export function TraceExplorer({
         <aside
           // A new panel per selection: it opens scrolled to the top, message toggles reset.
           key={selectedSpan?.id ?? "trace"}
-          // Clears the sticky header + environment bar, like the project sidebar; scrolls on its own.
-          className="card p-5 xl:sticky xl:top-[7.75rem] xl:max-h-[calc(100dvh-8.75rem)] xl:overflow-y-auto"
+          // Sticks below the header bars (--sticky-top, set by the project layout); scrolls on its own.
+          className="card p-5 xl:sticky xl:top-[var(--sticky-top)] xl:max-h-[calc(100dvh_-_var(--sticky-top)_-_1rem)] xl:overflow-y-auto"
           aria-label="Inspector"
         >
           {selectedSpan ? (
-            <>
-              <div className="mb-4 flex items-start gap-3">
-                <span
-                  className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ background: KIND_COLOR[selectedSpan.kind] }}
-                  aria-hidden
-                />
-                <div className="min-w-0">
-                  <h2
-                    className="truncate font-display text-2xl leading-tight text-ink"
-                    title={selectedSpan.name}
-                  >
-                    {selectedSpan.name}
-                  </h2>
-                  <p className="font-mono text-[11px] text-ink-3">span · {selectedSpan.kind}</p>
-                </div>
-              </div>
-              <div className="divide-y divide-line border-t border-line">
-                {spanSections(selectedSpan)}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2
-                    className="truncate font-display text-2xl leading-tight text-ink"
-                    title={trace.name}
-                  >
-                    {trace.name}
-                  </h2>
-                  <p className="font-mono text-[11px] text-ink-3">trace</p>
-                </div>
-                <a
-                  href={`/api/projects/${projectId}/traces/${trace.id}/export`}
-                  className="btn btn-ghost btn-sm shrink-0"
-                  download={`firetrace-${trace.id}.json`}
+            <div className="mb-4 flex items-start gap-3">
+              <span
+                className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ background: KIND_COLOR[selectedSpan.kind] }}
+                aria-hidden
+              />
+              <div className="min-w-0">
+                <h2
+                  className="truncate font-display text-2xl leading-tight text-ink"
+                  title={selectedSpan.name}
                 >
-                  Download JSON
-                </a>
+                  {selectedSpan.name}
+                </h2>
+                <p className="font-mono text-[11px] text-ink-3">span · {selectedSpan.kind}</p>
               </div>
-              <div className="divide-y divide-line border-t border-line">{traceSections}</div>
-            </>
+            </div>
+          ) : (
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2
+                  className="truncate font-display text-2xl leading-tight text-ink"
+                  title={trace.name}
+                >
+                  {trace.name}
+                </h2>
+                <p className="font-mono text-[11px] text-ink-3">trace</p>
+              </div>
+              <a
+                href={`/api/projects/${projectId}/traces/${trace.id}/export`}
+                className="btn btn-ghost btn-sm shrink-0"
+                download={`firetrace-${trace.id}.json`}
+              >
+                Download JSON
+              </a>
+            </div>
           )}
+          <div className="divide-y divide-line border-t border-line">
+            {selectedSpan ? spanSections(selectedSpan) : traceSections()}
+          </div>
         </aside>
       )}
     </div>

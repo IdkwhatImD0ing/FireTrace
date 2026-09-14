@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { JsonView } from "@/components/ui/JsonView";
 import { detectChatMessages, type ChatMessage } from "@/lib/firetrace/chat-format";
 import type { JsonValue } from "@/lib/firetrace/schema";
@@ -55,8 +55,12 @@ function Message({ message }: { message: ChatMessage }) {
   );
 }
 
-/** Chat-shaped input/output as role-labelled messages, with a JSON toggle; else plain JSON. */
-export function MessageList({
+/**
+ * Chat-shaped input/output as role-labelled messages, with a JSON toggle; else plain JSON.
+ * Memoized: the inspector re-renders on every span-search keystroke, and large payloads
+ * are expensive to re-render.
+ */
+export const MessageList = memo(function MessageList({
   value,
   emptyLabel,
 }: {
@@ -111,4 +115,4 @@ export function MessageList({
       )}
     </div>
   );
-}
+});
