@@ -127,8 +127,9 @@ test("selecting spans in the trace tree updates the inspector", async () => {
   await list.getByRole("option", { name: /generate-text/ }).click();
   await expect(inspector.getByRole("heading", { name: "generate-text" })).toBeVisible();
   await expect(inspector).toContainText("span · llm");
-  await inspector.getByRole("tab", { name: /Output/ }).click();
-  await expect(inspector.getByRole("tabpanel")).toContainText("Vector search finds items");
+  await expect(inspector.getByRole("region", { name: "Output" })).toContainText(
+    "Vector search finds items",
+  );
 
   // Keyboard: the row keeps focus after a click, ArrowUp selects the previous row.
   await list.getByRole("option", { name: /lookup-example/ }).click();
@@ -138,8 +139,9 @@ test("selecting spans in the trace tree updates the inspector", async () => {
   await expect(inspector).toContainText("span · retriever");
 
   await list.getByRole("option", { name: /lookup-example/ }).click();
-  await inspector.getByRole("tab", { name: /Error/ }).click();
-  await expect(inspector.getByRole("tabpanel")).toContainText("HTTP 429 Too Many Requests");
+  await expect(inspector.getByRole("region", { name: "Error" })).toContainText(
+    "HTTP 429 Too Many Requests",
+  );
 
   // Back to the trace row: the download link returns.
   await list.getByRole("option", { name: /alpha-run/ }).click();

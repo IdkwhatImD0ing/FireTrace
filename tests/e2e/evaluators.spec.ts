@@ -86,8 +86,7 @@ test("the trace page offers a run control that stays disabled without an endpoin
   await expect(page.getByText("topic", { exact: true })).toBeVisible();
 
   await page.goto(`/projects/${projectId}/traces/${TRACE_ID}`);
-  await page.getByRole("tab", { name: /^Scores/ }).click();
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByRole("region", { name: "Scores" });
   await expect(panel.getByLabel(/^Run evaluator/)).toHaveValue(/.+/);
   await expect(panel.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
   await expect(panel).toContainText("FIRETRACE_EVAL_MODEL");

@@ -1,11 +1,17 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useId,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { StatusBadge, StatusIcon } from "@/components/StatusBadge";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { JsonView } from "@/components/ui/JsonView";
 import { MessageList } from "./MessageList";
-import { Tabs, type TabItem } from "@/components/ui/Tabs";
 import { KIND_COLOR } from "@/lib/firetrace/kinds";
 import { SPAN_KINDS, type SpanKind } from "@/lib/firetrace/schema";
 import { buildSpanTree, descendantCount, visibleRows } from "@/lib/firetrace/tree";
@@ -53,6 +59,19 @@ function IdFact({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** One titled block of the inspector; every block is on the page at once, no tabs. */
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="py-4 last:pb-0">
+      <h3 id={id} className="mb-2 font-mono text-xs tracking-widest text-ink uppercase">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
 function usageFacts(
   usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null,
 ) {
@@ -84,14 +103,14 @@ export function TraceExplorer({
   spans,
   projectId,
   preview = false,
-  scoresTab,
+  scoresSection,
 }: {
   trace: TraceDetail;
   spans: SpanDetail[];
   projectId: string;
   preview?: boolean;
-  /** Rendered as a "Scores" inspector tab on the trace page; absent in the landing preview. */
-  scoresTab?: Pick<TabItem, "badge" | "content">;
+  /** Rendered as the inspector's "Scores" section on the trace page; absent in the landing preview. */
+  scoresSection?: ReactNode;
 }) {
   const tree = useMemo(
     () =>
@@ -103,7 +122,6 @@ export function TraceExplorer({
   );
   const allRows = tree.rows;
   const [selection, setSelection] = useState<Selection>({ kind: "trace" });
-  const [tab, setTab] = useState("overview");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const rows = useMemo(() => visibleRows(allRows, collapsed, query), [allRows, collapsed, query]);
@@ -134,11 +152,6 @@ export function TraceExplorer({
     selection.kind === "span" ? (spans.find((s) => s.id === selection.id) ?? null) : null;
   const kindsPresent = SPAN_KINDS.filter((k) => spans.some((s) => s.kind === k));
 
-  function select(next: Selection) {
-    setSelection(next);
-    setTab("overview");
-  }
-
   function onListKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selection.kind === "span") {
       const node = allRows.find((r) => r.span.id === selection.id);
@@ -166,16 +179,26 @@ export function TraceExplorer({
     if (e.key === "ArrowUp") next = Math.max(0, current - 1);
     if (e.key === "Home") next = 0;
     if (e.key === "End") next = order.length - 1;
-    select(order[next]);
+    setSelection(order[next]);
     const target = e.currentTarget.querySelector<HTMLButtonElement>(`[data-row="${next}"]`);
     target?.focus();
   }
 
-  const traceTabs: TabItem[] = [
-    {
-      id: "overview",
-      label: "Overview",
-      content: (
+  const traceSections = () => (
+    <>
+      <Section title="Input">
+        <MessageList value={trace.input} />
+      </Section>
+      <Section title="Output">
+        <MessageList
+          value={trace.output}
+          emptyLabel={
+            trace.status === "running" ? "Not yet: the trace is still running" : undefined
+          }
+        />
+      </Section>
+      {scoresSection && <Section title="Scores">{scoresSection}</Section>}
+      <Section title="Details">
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Fact label="status" value={<StatusBadge status={trace.status} />} mono={false} />
           <Fact label="duration" value={formatDuration(trace.durationMs)} />
@@ -211,32 +234,43 @@ export function TraceExplorer({
             </div>
           )}
         </div>
-      ),
-    },
-    { id: "input", label: "Input", content: <MessageList value={trace.input} /> },
-    { id: "output", label: "Output", content: <MessageList value={trace.output} /> },
-    {
-      id: "metadata",
-      label: "Metadata",
-      badge: Object.keys(trace.metadata).length || undefined,
-      content: (
-        <JsonView
-          value={Object.keys(trace.metadata).length ? trace.metadata : null}
-          emptyLabel="No metadata"
-        />
-      ),
-    },
-    ...(scoresTab ? [{ id: "scores", label: "Scores", ...scoresTab }] : []),
-  ];
+      </Section>
+      {Object.keys(trace.metadata).length > 0 && (
+        <Section title="Metadata">
+          <JsonView value={trace.metadata} />
+        </Section>
+      )}
+    </>
+  );
 
-  const spanTabs = (span: SpanDetail): TabItem[] => {
+  const spanSections = (span: SpanDetail) => {
     const err = errorDetails(span);
     const node = allRows.find((r) => r.span.id === span.id);
-    return [
-      {
-        id: "overview",
-        label: "Overview",
-        content: (
+    return (
+      <>
+        <Section title="Input">
+          <MessageList value={span.input} />
+        </Section>
+        <Section title="Output">
+          <MessageList value={span.output} />
+        </Section>
+        {(span.status === "error" || Boolean(err.message)) && (
+          <Section title="Error">
+            <div className="space-y-3">
+              {!err.message && (
+                <p className="text-sm text-ink-2">
+                  The span ended with status error but attached no error details.
+                </p>
+              )}
+              {err.type && <Fact label="type" value={err.type} />}
+              {err.message && (
+                <pre className="pre border-crit/40 bg-crit/10 text-crit-2">{err.message}</pre>
+              )}
+              {err.stack && <pre className="pre max-h-72 overflow-auto">{err.stack}</pre>}
+            </div>
+          </Section>
+        )}
+        <Section title="Details">
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <Fact label="status" value={<StatusBadge status={span.status} />} mono={false} />
             <Fact
@@ -277,18 +311,9 @@ export function TraceExplorer({
               )}
             </div>
           </div>
-        ),
-      },
-      { id: "input", label: "Input", content: <MessageList value={span.input} /> },
-      { id: "output", label: "Output", content: <MessageList value={span.output} /> },
-      {
-        id: "attributes",
-        label: "Attributes",
-        badge: Object.keys(span.attributes).length || undefined,
-        content:
-          Object.keys(span.attributes).length === 0 ? (
-            <p className="text-sm text-ink-3">No attributes</p>
-          ) : (
+        </Section>
+        {Object.keys(span.attributes).length > 0 && (
+          <Section title="Attributes">
             <dl className="grid grid-cols-[minmax(0,12rem)_1fr] gap-x-4 gap-y-1.5 font-mono text-xs">
               {Object.entries(span.attributes).map(([k, v]) => (
                 <div key={k} className="contents">
@@ -301,16 +326,10 @@ export function TraceExplorer({
                 </div>
               ))}
             </dl>
-          ),
-      },
-      {
-        id: "events",
-        label: "Events",
-        badge: span.events.length || undefined,
-        content:
-          span.events.length === 0 ? (
-            <p className="text-sm text-ink-3">No events</p>
-          ) : (
+          </Section>
+        )}
+        {span.events.length > 0 && (
+          <Section title="Events">
             <ol className="space-y-2">
               {span.events.map((ev, i) => (
                 <li key={i} className="rounded-md border border-line bg-bg-2 p-3">
@@ -328,31 +347,10 @@ export function TraceExplorer({
                 </li>
               ))}
             </ol>
-          ),
-      },
-      {
-        id: "error",
-        label: "Error",
-        badge: span.status === "error" ? "!" : undefined,
-        content:
-          span.status !== "error" && !err.message ? (
-            <p className="text-sm text-ink-3">No error recorded.</p>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-sm text-ink-2">
-                {err.message
-                  ? "The span reported an error."
-                  : "The span ended with status error but attached no error details."}
-              </p>
-              {err.type && <Fact label="type" value={err.type} />}
-              {err.message && (
-                <pre className="pre border-crit/40 bg-crit/10 text-crit-2">{err.message}</pre>
-              )}
-              {err.stack && <pre className="pre max-h-72 overflow-auto">{err.stack}</pre>}
-            </div>
-          ),
-      },
-    ];
+          </Section>
+        )}
+      </>
+    );
   };
 
   return (
@@ -423,7 +421,7 @@ export function TraceExplorer({
               role="option"
               data-row={0}
               tabIndex={selection.kind === "trace" ? 0 : -1}
-              onClick={() => select({ kind: "trace" })}
+              onClick={() => setSelection({ kind: "trace" })}
               aria-selected={selection.kind === "trace"}
               className={`grid w-full grid-cols-[var(--name-col)_1fr] items-stretch text-left transition-colors hover:bg-surface-2/70 ${
                 selection.kind === "trace"
@@ -471,7 +469,7 @@ export function TraceExplorer({
                       toggle(span.id);
                       return;
                     }
-                    select({ kind: "span", id: span.id });
+                    setSelection({ kind: "span", id: span.id });
                   }}
                   aria-selected={selected}
                   disabled={preview}
@@ -577,50 +575,53 @@ export function TraceExplorer({
       </div>
 
       {!preview && (
-        <aside className="card p-5 xl:sticky xl:top-20" aria-label="Inspector">
+        <aside
+          // A new panel per selection: it opens scrolled to the top, message toggles reset.
+          key={selectedSpan?.id ?? "trace"}
+          // Sticks below the header bars (--sticky-top, set by the project layout); scrolls on its own.
+          className="card p-5 xl:sticky xl:top-[var(--sticky-top)] xl:max-h-[calc(100dvh_-_var(--sticky-top)_-_1rem)] xl:overflow-y-auto"
+          aria-label="Inspector"
+        >
           {selectedSpan ? (
-            <>
-              <div className="mb-4 flex items-start gap-3">
-                <span
-                  className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ background: KIND_COLOR[selectedSpan.kind] }}
-                  aria-hidden
-                />
-                <div className="min-w-0">
-                  <h2
-                    className="truncate font-display text-2xl leading-tight text-ink"
-                    title={selectedSpan.name}
-                  >
-                    {selectedSpan.name}
-                  </h2>
-                  <p className="font-mono text-[11px] text-ink-3">span · {selectedSpan.kind}</p>
-                </div>
-              </div>
-              <Tabs items={spanTabs(selectedSpan)} value={tab} onChange={setTab} />
-            </>
-          ) : (
-            <>
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2
-                    className="truncate font-display text-2xl leading-tight text-ink"
-                    title={trace.name}
-                  >
-                    {trace.name}
-                  </h2>
-                  <p className="font-mono text-[11px] text-ink-3">trace</p>
-                </div>
-                <a
-                  href={`/api/projects/${projectId}/traces/${trace.id}/export`}
-                  className="btn btn-ghost btn-sm shrink-0"
-                  download={`firetrace-${trace.id}.json`}
+            <div className="mb-4 flex items-start gap-3">
+              <span
+                className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ background: KIND_COLOR[selectedSpan.kind] }}
+                aria-hidden
+              />
+              <div className="min-w-0">
+                <h2
+                  className="truncate font-display text-2xl leading-tight text-ink"
+                  title={selectedSpan.name}
                 >
-                  Download JSON
-                </a>
+                  {selectedSpan.name}
+                </h2>
+                <p className="font-mono text-[11px] text-ink-3">span · {selectedSpan.kind}</p>
               </div>
-              <Tabs items={traceTabs} value={tab} onChange={setTab} />
-            </>
+            </div>
+          ) : (
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2
+                  className="truncate font-display text-2xl leading-tight text-ink"
+                  title={trace.name}
+                >
+                  {trace.name}
+                </h2>
+                <p className="font-mono text-[11px] text-ink-3">trace</p>
+              </div>
+              <a
+                href={`/api/projects/${projectId}/traces/${trace.id}/export`}
+                className="btn btn-ghost btn-sm shrink-0"
+                download={`firetrace-${trace.id}.json`}
+              >
+                Download JSON
+              </a>
+            </div>
           )}
+          <div className="divide-y divide-line border-t border-line">
+            {selectedSpan ? spanSections(selectedSpan) : traceSections()}
+          </div>
         </aside>
       )}
     </div>

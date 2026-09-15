@@ -11,7 +11,9 @@ import { requireOwnerOrRedirect } from "@/lib/auth/session";
 /**
  * Every page inside a project shares the environment bar and the sidebar;
  * pages re-check access themselves. The bar is sticky so the active
- * environment is never out of sight while reading numbers.
+ * environment is never out of sight while reading numbers. `--sticky-top` is
+ * where sticky panels below it start: the Shell header (h-14) plus this bar
+ * (h-11) plus breathing room.
  */
 export default async function ProjectLayout({
   children,
@@ -26,7 +28,7 @@ export default async function ProjectLayout({
   const view = await getEnvironmentView(db, projectId);
 
   return (
-    <div>
+    <div className="[--sticky-top:7.75rem]">
       <div className="sticky top-14 z-20 -mx-4 -mt-8 mb-6 border-b border-line bg-bg px-4 sm:-mx-6 sm:px-6">
         <div className="flex h-11 items-center gap-3 overflow-x-auto">
           <EnvironmentSelector selection={view.selection} options={view.options} />

@@ -192,7 +192,7 @@ Passing `error` to `span.end()` or `trace.end()`:
 - writes those keys into the span's `attributes` (or the trace's `metadata`);
 - sets `status` to `"error"` unless you passed an explicit `status`.
 
-The FireTrace dashboard's Error tab reads `error.type`, `error.message`, and `error.stack` from span attributes, so errors recorded this way are shown without extra work. Stacks are excluded by default because they can contain file paths and, in some frameworks, secrets.
+The FireTrace dashboard's Error section reads `error.type`, `error.message`, and `error.stack` from span attributes, so errors recorded this way are shown without extra work. Stacks are excluded by default because they can contain file paths and, in some frameworks, secrets.
 
 ## Content conversion, redaction, and truncation
 

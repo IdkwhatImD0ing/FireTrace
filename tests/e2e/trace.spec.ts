@@ -77,21 +77,29 @@ test("search narrows the span tree to matches and their ancestors; collapse hide
   await expect(options().filter({ hasText: "plan" })).toContainText("156 tok");
 });
 
-test("chat-shaped span input renders as messages with a JSON toggle", async () => {
+test("the inspector shows every section at once; chat-shaped input renders as messages", async () => {
   await options().filter({ hasText: /^plan/ }).click();
-  await page.getByRole("tab", { name: "Input" }).click();
-  const panel = page.getByRole("tabpanel");
-  await expect(panel).toContainText("1 message");
-  await expect(panel.getByText("user", { exact: true })).toBeVisible();
-  await expect(panel).toContainText("Plan how to answer: explain vector search.");
-  await panel.getByRole("group", { name: "View as" }).getByRole("button", { name: "JSON" }).click();
-  await expect(panel).toContainText('"messages"');
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(inspector.getByRole("tab")).toHaveCount(0);
+  const input = inspector.getByRole("region", { name: "Input" });
+  await expect(input).toContainText("1 message");
+  await expect(input.getByText("user", { exact: true })).toBeVisible();
+  await expect(input).toContainText("Plan how to answer: explain vector search.");
+  await expect(inspector.getByRole("region", { name: "Output" })).toContainText(
+    "1. Retrieve definitions.",
+  );
+  await expect(inspector.getByRole("region", { name: "Details" })).toContainText("start offset");
+  await expect(inspector.getByRole("region", { name: "Attributes" })).toContainText("temperature");
+  // Empty sections are left out: this span has no events and no error.
+  await expect(inspector.getByRole("region", { name: "Events" })).toHaveCount(0);
+  await expect(inspector.getByRole("region", { name: "Error" })).toHaveCount(0);
+  await input.getByRole("group", { name: "View as" }).getByRole("button", { name: "JSON" }).click();
+  await expect(input).toContainText('"messages"');
 
   // A plain object is not a chat: no toggle, just JSON.
   await options().first().click();
-  await page.getByRole("tab", { name: "Input" }).click();
-  await expect(page.getByRole("tabpanel")).toContainText('"prompt"');
-  await expect(page.getByRole("tabpanel").getByRole("group", { name: "View as" })).toHaveCount(0);
+  await expect(inspector.getByRole("region", { name: "Input" })).toContainText('"prompt"');
+  await expect(inspector.getByRole("group", { name: "View as" })).toHaveCount(0);
 });
 
 test("newer/older links and the [ ] keys walk the list in its filtered order", async () => {
@@ -147,6 +155,7 @@ test("a streamed trace that has not ended shows as running in the list and on it
   });
   delete body.trace.endedAt;
   delete body.trace.status;
+  delete body.trace.output; // arrives with the end
   body.trace.spans = body.trace.spans.slice(0, 2);
   const res = await postTrace(page.request, apiKey, body);
   expect(res.status()).toBe(201);
@@ -162,4 +171,34 @@ test("a streamed trace that has not ended shows as running in the list and on it
   await expect(page.getByRole("heading", { name: "still-running", level: 1 })).toBeVisible();
   await expect(page.getByText("running", { exact: true }).first()).toBeVisible();
   await expect(options()).toHaveCount(3); // trace row + the two spans that arrived
+  // The output has not arrived yet; it was not dropped.
+  await expect(
+    page.getByRole("complementary", { name: "Inspector" }).getByRole("region", { name: "Output" }),
+  ).toContainText("still running");
+});
+
+test("empty sections are left out; a failed span without details still shows an Error section", async () => {
+  const id = "e".repeat(32);
+  const body = sampleTraceRequest({
+    id,
+    name: "bare-failure",
+    startedAt: new Date(todayMs + 20 * 60_000).toISOString(),
+  });
+  body.trace.metadata = {};
+  const tool = body.trace.spans.find((s) => s.name === "lookup-example")!;
+  tool.attributes = {};
+  expect((await postTrace(page.request, apiKey, body)).status()).toBe(201);
+
+  await page.goto(`/projects/${projectId}/traces/${id}`);
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(inspector.getByRole("region", { name: "Details" })).toBeVisible();
+  await expect(inspector.getByRole("region", { name: "Metadata" })).toHaveCount(0);
+
+  await options()
+    .filter({ hasText: /^lookup-example/ })
+    .click();
+  await expect(inspector.getByRole("region", { name: "Error" })).toContainText(
+    "attached no error details",
+  );
+  await expect(inspector.getByRole("region", { name: "Attributes" })).toHaveCount(0);
 });

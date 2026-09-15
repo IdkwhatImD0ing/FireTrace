@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { CopyButton } from "@/components/ui/CopyButton";
 
 /**
@@ -53,7 +53,8 @@ export function stringifyJson(value: unknown): string {
   }
 }
 
-export function JsonView({
+/** Memoized: highlighting re-runs over the whole payload, so skip it when the value is unchanged. */
+export const JsonView = memo(function JsonView({
   value,
   emptyLabel = "Not recorded",
   maxHeight = "28rem",
@@ -83,4 +84,4 @@ export function JsonView({
       </pre>
     </div>
   );
-}
+});

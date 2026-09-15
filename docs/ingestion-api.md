@@ -188,7 +188,7 @@ Server logs for ingestion contain the request id, project id, key id, trace id, 
 
 ## Error attribute convention
 
-FireTrace has no dedicated error field. Errors are recorded as attributes, and the dashboard's **Error** tab reads them from a span's `attributes`:
+FireTrace has no dedicated error field. Errors are recorded as attributes, and the inspector's **Error** section reads them from a span's `attributes`:
 
 | Attribute       | Fallbacks read by the dashboard | Meaning                 |
 | --------------- | ------------------------------- | ----------------------- |
@@ -196,7 +196,7 @@ FireTrace has no dedicated error field. Errors are recorded as attributes, and t
 | `error.message` | `exception.message`             | Human-readable message  |
 | `error.stack`   | `exception.stacktrace`          | Stack trace (optional)  |
 
-Set the span's `status` to `"error"` as well; the Error tab and the trace's `errorCount` are driven by attributes and status respectively. The JavaScript SDK writes `error.type` and `error.message` (and `error.stack` only when `includeErrorStacks: true`) into span `attributes` for `span.end({ error })` and into trace `metadata` for `trace.end({ error })`, and sets the status to `"error"` unless you pass an explicit status. The SDK also records `firetrace.truncated: ["input" | "output"]` in `attributes` or `metadata` when it truncated a value client-side.
+Set the span's `status` to `"error"` as well; the inspector's Error section and the trace's `errorCount` are driven by attributes and status respectively. The JavaScript SDK writes `error.type` and `error.message` (and `error.stack` only when `includeErrorStacks: true`) into span `attributes` for `span.end({ error })` and into trace `metadata` for `trace.end({ error })`, and sets the status to `"error"` unless you pass an explicit status. The SDK also records `firetrace.truncated: ["input" | "output"]` in `attributes` or `metadata` when it truncated a value client-side.
 
 Example span with an error:
 
@@ -430,7 +430,7 @@ curl -X PATCH https://your-deployment.example/api/v1/traces/$TRACE_ID \
   -d '{"metadata":{"feedback":1,"feedbackLabel":"thumbs-up"}}'
 ```
 
-The merged metadata is visible immediately on the trace page's **Metadata** tab.
+The merged metadata is visible immediately in the **Metadata** section of the trace page's inspector.
 
 The TypeScript SDK wraps the same call as `api.patchMetadata(traceId, metadata)` ([packages/sdk-js](../packages/sdk-js/README.md)), and agents can reach it over MCP as `patch_trace_metadata` ([mcp.md](./mcp.md)).
 

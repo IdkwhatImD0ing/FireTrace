@@ -50,8 +50,7 @@ test("a score sent through the API shows on the trace list and the trace page", 
   await expect(page.getByRole("cell", { name: /accuracy=0\.8/ })).toBeVisible();
 
   await page.goto(`/projects/${projectId}/traces/${TRACE_ID}`);
-  await page.getByRole("tab", { name: /^Scores/ }).click();
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByRole("region", { name: "Scores" });
   await expect(panel).toContainText("accuracy");
   await expect(panel).toContainText("= 0.8");
   await expect(panel).toContainText("cited the right page");
@@ -59,7 +58,7 @@ test("a score sent through the API shows on the trace list and the trace page", 
 });
 
 test("the owner annotates the trace from the inspector and the scores page sums it up", async () => {
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByRole("region", { name: "Scores" });
   await panel.getByLabel(/^Name/).fill("helpful");
   await panel.getByLabel(/^Type/).selectOption("boolean");
   await panel.getByLabel(/^Value/).selectOption("true");
@@ -85,8 +84,7 @@ test("the owner annotates the trace from the inspector and the scores page sums 
 
 test("deleting a score from the inspector removes it everywhere", async () => {
   await page.goto(`/projects/${projectId}/traces/${TRACE_ID}`);
-  await page.getByRole("tab", { name: /^Scores/ }).click();
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByRole("region", { name: "Scores" });
   await panel.getByRole("button", { name: "Delete score helpful" }).click();
   await panel.getByRole("button", { name: "Confirm" }).click();
   await expect(panel).not.toContainText("= true");

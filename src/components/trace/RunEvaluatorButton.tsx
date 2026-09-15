@@ -7,7 +7,7 @@ import { runEvaluatorAction } from "@/lib/actions";
 import type { RunOutcome } from "@/lib/eval/run";
 import { formatScoreValue } from "@/lib/format";
 
-/** Run one evaluator against this trace from the Scores tab (owners only). */
+/** Run one evaluator against this trace from the inspector's Scores section (owners only). */
 export function RunEvaluatorButton({
   projectId,
   traceId,
