@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.1.13"
+    "zod": "^4.6.6"
   },
   "keywords": [
     "firetrace",
